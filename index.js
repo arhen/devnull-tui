@@ -182,7 +182,11 @@ async function refresh({ quiet = false } = {}) {
     if (Date.now() > flashUntil) state.status = null;
   } catch (error) {
     if (token === fetchSeq) {
-      state.error = clean(error instanceof Error ? error.message : String(error));
+      const message = clean(error instanceof Error ? error.message : String(error));
+      // A key the server does not know yet reads as "no longer approved": the
+      // pane has not finished the approval, so offer it rather than retry.
+      if (needsDevice() && /approved/.test(message)) state.gate = state.tab;
+      else state.error = message;
       state.loading = false;
     }
   } finally {

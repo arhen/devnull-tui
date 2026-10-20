@@ -149,8 +149,10 @@ flow the mobile app uses:
 
 1. It makes an Ed25519 key under `HERDR_PLUGIN_STATE_DIR` and opens
    `/mobile/authorize` in your browser.
-2. You approve it there; the browser is redirected to `devnull://device?code=…`,
-   which no app has to open.
+2. You approve it there; the browser is redirected to `devnull://device?code=…`.
+   Chrome has no handler for that scheme and drops the redirect silently, so
+   copy the code out of the address bar (or let any `devnull://` handler catch
+   it) and it stays valid until it is redeemed.
 3. Paste that code (or the whole redirected URL) into the pane.
 
 From then on `s` stars and unstars, `d` deletes your own commits (twice to
