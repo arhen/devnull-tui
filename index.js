@@ -48,7 +48,7 @@ const state = {
   error: null,
   help: false,
   loading: true,
-  avatarMode: /** @type {"circle"|"photo"|"none"} */ (args.includes("--photos") ? "photo" : "circle"),
+  avatarMode: /** @type {"circle"|"photo"|"none"} */ (args.includes("--no-photos") ? "circle" : "photo"),
   kitty: false,
   me: null,
   fetchedAt: 0,
