@@ -5,6 +5,7 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
 import { MAX_IMAGES, droppedPaths, extractImages, readAttachment } from "./lib/attachments.js";
+import * as catcher from "./lib/catcher.js";
 import { fetchFollowing, fetchNotificationGroup, fetchNotifications, fetchUnread } from "./lib/api.js";
 import * as device from "./lib/device.js";
 import { fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
@@ -44,6 +45,7 @@ const state = {
   },
   gate: null,
   unread: 0,
+  approval: /** @type {AbortController|null} */ (null),
   thread: null,
   threadStack: [],
   timelineIndex: 0,
@@ -403,18 +405,65 @@ async function openInBrowserTab(/** @type {string} */ url) {
   return spawnDetached(fallback, [url]);
 }
 
-/** Starts the one-time approval of this pane as a /dev/null device. */
+/** The last step of any approval: redeem the code, then act as it was asked. */
+async function finishApproval(/** @type {string} */ code) {
+  await device.redeem(code);
+  flash("device approved ✓");
+  const pending = state.pendingStar;
+  state.pendingStar = null;
+  if (pending) await toggleStar(pending);
+  else if (needsDevice()) void refresh();
+  else void refreshUnread();
+  draw();
+}
+
+/** Pasting the code by hand: the way in when no handler can catch it. */
+const startDeviceComposer = () => {
+  state.composer = { kind: "device", replyTo: null, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
+  flash("paste the code the browser gave you");
+  draw();
+};
+
+/**
+ * Starts the one-time approval of this pane as a /dev/null device. The approval
+ * page answers on devnull://, which a desktop has no handler for, so the pane
+ * registers one for the wait and takes it away again; when it cannot, the code
+ * is pasted by hand instead.
+ */
 async function approveDevice(/** @type {any} */ after = null) {
+  state.pendingStar = after;
+  const abort = new AbortController();
+  state.approval = abort;
+
+  let caught = false;
+  try {
+    caught = await catcher.install();
+  } catch {
+    caught = false;
+  }
+
   try {
     const url = await device.authorizationUrl();
     await openInBrowserTab(url);
-    state.pendingStar = after;
-    state.composer = { kind: "device", replyTo: null, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
-    flash("approve in the browser, then paste the code");
+    if (!caught) {
+      state.approval = null;
+      return startDeviceComposer();
+    }
+
+    flash("approve in the browser: this pane catches the code itself");
+    draw();
+    const code = await catcher.waitForCode({ signal: abort.signal });
+    state.approval = null;
+    if (!code) return startDeviceComposer();
+    await finishApproval(code);
   } catch (error) {
+    state.approval = null;
     flash(clean(error instanceof Error ? error.message : String(error)));
+    startDeviceComposer();
+  } finally {
+    await catcher.remove();
+    draw();
   }
-  draw();
 }
 
 async function openSelected() {
@@ -853,13 +902,8 @@ async function submit() {
     composer.busy = "approving…";
     draw();
     try {
-      await device.redeem(code);
       state.composer = null;
-      flash("device approved ✓");
-      const pending = state.pendingStar;
-      state.pendingStar = null;
-      if (pending) await toggleStar(pending);
-      else if (needsDevice()) void refresh();
+      await finishApproval(code);
     } catch (error) {
       if (state.composer === composer) {
         composer.busy = null;
@@ -1191,6 +1235,11 @@ function onKey(key, text) {
       state.help = !state.help;
       break;
     case "\u001b":
+      if (state.approval) {
+        state.approval.abort();
+        state.approval = null;
+        return startDeviceComposer();
+      }
       return back();
     default:
       return;
@@ -1227,7 +1276,11 @@ const restore = () => {
 const quit = () => {
   cleanup();
   restore();
-  process.exit(0);
+  // An approval in flight leaves its handler registered: take it away first,
+  // but never hold the exit longer than a moment.
+  void Promise.race([catcher.remove(), new Promise((resolve) => setTimeout(resolve, 2000))]).finally(() =>
+    process.exit(0),
+  );
 };
 
 function startKeys(/** @type {string} */ startingStash = "") {
