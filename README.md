@@ -3,25 +3,26 @@
 The [/dev/null](https://dev-null.sh) commit log, as a timeline in a Herdr pane.
 
 Every post on /dev/null is a git commit drawn on a rail, coloured by its
-author's lane: an initials chip on the author's colour, the short hash on the
-right, and bodies with inline code, links, quotes, polls, link previews and
-replies. Enter opens a commit with its whole conversation, `c` / `R` commit and
-reply as you, signed with your SSH key.
+author's lane: a small circle before the name, coloured from the author's real
+picture, the short hash on the right, and bodies with inline code, links,
+quotes, polls, link previews and replies. Enter (or `→`) opens a commit with its
+whole conversation, `←` goes back, and `c` / `R` commit and reply as you, signed
+with your SSH key.
 
 ```
- RF  legecha @legecha · 4m                    40dd829
- RF  I haven't done social media for years.
-     But this feels different.
-│    Hello, World!
-│    ★ 3   ↳ 1
+⬤ legecha @legecha · 4m                    40dd829
+│ I haven't done social media for years.
+│ But this feels different.
+│ Hello, World!
+│ ★ 3   ↳ 1
 ○
 ```
 
-Avatars have three modes, cycled with `a`: an initials chip on the author's lane
-colour (default), the GitHub picture as a 6×6 half-block image, or nothing.
-The photo mode is charming at close range and costs about three times the
-terminal output per frame, so the chip is what keeps the pane snappy; start
-with `--photos` to open it in photo mode.
+Avatars have three modes, cycled with `a`: the circle sampled from the author's
+GitHub picture (default, two columns, no picture drawn), the picture itself as
+a 6×6 half-block image, or nothing. The photo mode is charming up close and
+costs about three times the terminal output per frame, so the circle is what
+keeps the pane snappy; start with `--photos` to open it in photo mode.
 
 ## Requirements
 
@@ -81,18 +82,19 @@ The pane opens as a split beside the calling pane. Agents that install the
 | Key | |
 | --- | --- |
 | `j` / `k` | next / previous commit |
+| `→` / `←` | open the selected commit / go back one level |
 | `g` / `G` | first / last commit |
 | `ctrl+d` / `ctrl+u` | half a page |
-| `enter` | open the commit and its conversation |
+| `enter` | open the commit and its conversation (same as `→`) |
 | `e` | expand the selected reply's own replies |
 | `R` | reply to the selected commit |
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
-| `a` | avatars: initials chip → tiny photo → none |
+| `a` | avatars: colour circle → tiny photo → none |
 | `r` | refresh |
 | `t` / `1` / `2` | latest / trending |
 | `?` | keys |
-| `esc` | back to the timeline |
+| `esc` | back one level: reply → its parent → timeline |
 | `q` | close the pane; in a commit, back to the timeline |
 
 ## Writing

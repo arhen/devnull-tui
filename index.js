@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
-import { avatarRows } from "./lib/avatars.js";
+import { avatar } from "./lib/avatars.js";
 import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
 import { clean, graphemes, sanitize } from "./lib/text.js";
@@ -46,7 +46,7 @@ const state = {
   error: null,
   help: false,
   loading: true,
-  avatarMode: /** @type {"chip"|"photo"|"none"} */ (args.includes("--photos") ? "photo" : "chip"),
+  avatarMode: /** @type {"circle"|"photo"|"none"} */ (args.includes("--photos") ? "photo" : "circle"),
   me: null,
   fetchedAt: 0,
   now: Date.now(),
@@ -215,6 +215,8 @@ const expand = async () => {
   draw();
 };
 
+let painted = /** @type {string[]} */ ([]);
+
 const draw = () => {
   if (once) return;
   state.now = Date.now();
@@ -225,7 +227,20 @@ const draw = () => {
   state.selectedId = result.selectedId;
   state.blocks = result.blocks;
   if (state.mode === "timeline") state.timelineIndex = result.selectedIndex;
-  process.stdout.write(`\x1b[H${result.lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
+
+  // Rewrite only the rows that changed: moving the selection repaints two or
+  // three rows instead of the whole pane, which is what keeps it instant.
+  const lines = result.lines;
+  if (lines.length === painted.length) {
+    let frame = "";
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index] !== painted[index]) frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
+    }
+    if (frame) process.stdout.write(frame);
+  } else {
+    process.stdout.write(`\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
+  }
+  painted = lines;
 };
 
 state.refresh = draw;
@@ -364,6 +379,20 @@ function onKey(key, text) {
     case "q":
       if (state.mode === "thread") return back();
       return quit();
+    case "\u001b[C":
+    case "\u001bOC":
+    case "\r":
+      if (state.mode === "thread") {
+        const commit = selectedCommit();
+        if (commit) return void openReply(commit);
+      } else {
+        const commit = selectedCommit();
+        if (commit) return openThread(commit);
+      }
+      break;
+    case "\u001b[D":
+    case "\u001bOD":
+      return back();
     case "j":
     case "\u001b[B":
     case "\u001bOB":
@@ -394,15 +423,6 @@ function onKey(key, text) {
     case "\u001b[5~":
       scrollHalfPage(-1);
       break;
-    case "\r":
-      if (state.mode === "thread") {
-        const commit = selectedCommit();
-        if (commit) return void openReply(commit);
-      } else {
-        const commit = selectedCommit();
-        if (commit) return openThread(commit);
-      }
-      break;
     case "e":
       return void expand();
     case "R": {
@@ -424,7 +444,7 @@ function onKey(key, text) {
     case "2":
       return switchLog("trending");
     case "a":
-      state.avatarMode = state.avatarMode === "chip" ? "photo" : state.avatarMode === "photo" ? "none" : "chip";
+      state.avatarMode = state.avatarMode === "circle" ? "photo" : state.avatarMode === "photo" ? "none" : "circle";
       flash(`avatars: ${state.avatarMode}`);
       break;
     case "?":
@@ -564,9 +584,9 @@ async function main() {
     }
     const width = Number(flag("width", process.stdout.columns || 100));
     state.width = Number.isFinite(width) && width > 20 ? width : 100;
-    state.avatarMode = args.includes("--photos") || args.includes("--avatars") ? "photo" : "chip";
+    state.avatarMode = args.includes("--photos") || args.includes("--avatars") ? "photo" : "circle";
     if (state.avatarMode === "photo") {
-      for (const commit of state.commits) avatarRows(commit.author);
+      for (const commit of state.commits) avatar(commit.author);
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
     process.stdout.write(`${renderOnce(state).join("\n")}\n`);
@@ -574,10 +594,13 @@ async function main() {
   }
 
   process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J");
+  painted = [];
   process.on("exit", restore);
   process.stdout.on("resize", () => {
     state.width = process.stdout.columns || state.width;
     state.height = process.stdout.rows || state.height;
+    painted = [];
+    process.stdout.write("\x1b[2J");
     draw();
   });
 
