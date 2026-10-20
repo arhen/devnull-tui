@@ -114,6 +114,11 @@ The pane opens as a split beside the calling pane. Agents that install the
   draft, backspace removes the last image.
 - `enter` sends, `shift+enter` starts a new line, `esc` cancels, `ctrl+u`
   clears the draft.
+- The composer is two lines tall. `←`/`→` move the caret, `ctrl+←`/`ctrl+→`
+  (or `alt+←`/`alt+→`, which Herdr sends as `alt+b`/`alt+f`) move by word,
+  `ctrl+a`/`ctrl+e` (cmd+←/→) jump to the start or end of the line, `ctrl+k`
+  deletes to its end, `delete` deletes forward. `↑`/`↓` walk the caret through a
+  longer draft, and the hint says how many lines are out of view.
 
 ## Starring and deleting
 

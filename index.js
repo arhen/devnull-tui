@@ -290,7 +290,7 @@ const toggleStar = async (/** @type {any} */ commit) => {
       const url = await device.authorizationUrl();
       await openInBrowserTab(url);
       state.pendingStar = commit;
-      state.composer = { kind: "device", replyTo: null, value: "", busy: null, error: null, images: [], mention: null };
+      state.composer = { kind: "device", replyTo: null, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
       flash("approve in the browser, then paste the code");
     } catch (error) {
       flash(clean(error instanceof Error ? error.message : String(error)));
@@ -343,11 +343,16 @@ const MAX_SUGGESTIONS = 6;
 // an email, a path or a domain is not a mention.
 const MENTION_AT_END = /(?:^|[^\p{L}\p{N}_./@-])@([A-Za-z0-9][A-Za-z0-9-]{0,38}|)$/u;
 
-/** @param {string} value */
-const mentionAt = (value) => {
-  const match = MENTION_AT_END.exec(value);
+/**
+ * The "@handle" ending at the caret.
+ * @param {string} value
+ * @param {number} cursor
+ */
+const mentionAt = (value, cursor) => {
+  const before = value.slice(0, cursor);
+  const match = MENTION_AT_END.exec(before);
   if (!match) return null;
-  return { start: value.length - match[1].length - 1, query: match[1] };
+  return { start: cursor - match[1].length - 1, query: match[1] };
 };
 
 /** The people already on screen: the thread's own first, then the feed's. */
@@ -421,7 +426,8 @@ const updateMention = () => {
   if (!composer) return;
   stopMentionSearch();
 
-  const trigger = composer.kind === "device" ? null : mentionAt(composer.value);
+  cursorOf(composer);
+  const trigger = composer.kind === "device" ? null : mentionAt(composer.value, composer.cursor);
   if (!trigger) {
     composer.mention = null;
     return draw();
@@ -470,12 +476,148 @@ const insertMention = () => {
   const user = mention?.users?.[mention.index];
   if (!composer || !mention || !user) return false;
 
-  composer.value = `${composer.value.slice(0, mention.start)}@${user.username} `;
+  const cursor = cursorOf(composer);
+  if (mention.start > cursor) return false;
+
+  const inserted = `@${user.username} `;
+  composer.value = composer.value.slice(0, mention.start) + inserted + composer.value.slice(cursor);
+  composer.cursor = mention.start + inserted.length;
   composer.mention = null;
   composer.error = null;
   stopMentionSearch();
   draw();
   return true;
+};
+
+/* ---- editing: the caret moves through the draft, grapheme by grapheme ---- */
+
+/** Keeps the caret inside the draft, on a code-unit boundary it owns. */
+const cursorOf = (/** @type {any} */ composer) => {
+  const cursor = Number.isInteger(composer.cursor) ? composer.cursor : composer.value.length;
+  composer.cursor = Math.max(0, Math.min(composer.value.length, cursor));
+  return composer.cursor;
+};
+
+/** Every grapheme boundary in the draft, as offsets, so nothing splits a character. */
+const stopsOf = (/** @type {string} */ value) => {
+  /** @type {number[]} */
+  const offsets = [0];
+  let offset = 0;
+  for (const segment of graphemes(value)) {
+    offset += segment.length;
+    offsets.push(offset);
+  }
+  return offsets;
+};
+
+/** @param {string} value @param {number} cursor */
+const previousStop = (value, cursor) => {
+  let previous = 0;
+  for (const stop of stopsOf(value)) {
+    if (stop >= cursor) break;
+    previous = stop;
+  }
+  return previous;
+};
+
+/** @param {string} value @param {number} cursor */
+const nextStop = (value, cursor) => {
+  for (const stop of stopsOf(value)) if (stop > cursor) return stop;
+  return value.length;
+};
+
+/** @param {string} value @param {number} index */
+const snapBack = (value, index) => previousStop(value, Math.max(0, Math.min(value.length, index)) + 1);
+
+/** @param {string} value @param {number} cursor */
+const lineStart = (value, cursor) => value.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+
+/** @param {string} value @param {number} cursor */
+const lineEnd = (value, cursor) => {
+  const end = value.indexOf("\n", cursor);
+  return end === -1 ? value.length : end;
+};
+
+/** @param {string} value @param {number} cursor */
+const previousWord = (value, cursor) => {
+  const segments = graphemes(value);
+  const stops = stopsOf(value);
+  let index = stops.indexOf(cursor);
+  if (index < 0) index = 0;
+  while (index > 0 && /\s/.test(segments[index - 1])) index -= 1;
+  while (index > 0 && !/\s/.test(segments[index - 1])) index -= 1;
+  return stops[index];
+};
+
+/** @param {string} value @param {number} cursor */
+const nextWord = (value, cursor) => {
+  const segments = graphemes(value);
+  const stops = stopsOf(value);
+  let index = Math.max(0, stops.indexOf(cursor));
+  while (index < segments.length && /\s/.test(segments[index])) index += 1;
+  while (index < segments.length && !/\s/.test(segments[index])) index += 1;
+  return stops[index] ?? value.length;
+};
+
+const moveCursorTo = (/** @type {any} */ composer, /** @type {number} */ to) => {
+  composer.cursor = Math.max(0, Math.min(composer.value.length, to));
+  updateMention();
+};
+
+const insertAtCursor = (/** @type {any} */ composer, /** @type {string} */ text) => {
+  const cursor = cursorOf(composer);
+  composer.value = composer.value.slice(0, cursor) + text + composer.value.slice(cursor);
+  composer.cursor = cursor + text.length;
+  updateMention();
+};
+
+const deleteBackward = (/** @type {any} */ composer) => {
+  const cursor = cursorOf(composer);
+  if (!cursor) return updateMention();
+  const from = previousStop(composer.value, cursor);
+  composer.value = composer.value.slice(0, from) + composer.value.slice(cursor);
+  composer.cursor = from;
+  updateMention();
+};
+
+const deleteForward = (/** @type {any} */ composer) => {
+  const cursor = cursorOf(composer);
+  const to = nextStop(composer.value, cursor);
+  composer.value = composer.value.slice(0, cursor) + composer.value.slice(to);
+  updateMention();
+};
+
+const deleteWordBackward = (/** @type {any} */ composer) => {
+  const cursor = cursorOf(composer);
+  if (!cursor) return updateMention();
+  const from = previousWord(composer.value, cursor);
+  composer.value = composer.value.slice(0, from) + composer.value.slice(cursor);
+  composer.cursor = from;
+  updateMention();
+};
+
+const deleteToLineEnd = (/** @type {any} */ composer) => {
+  const cursor = cursorOf(composer);
+  composer.value = composer.value.slice(0, cursor) + composer.value.slice(lineEnd(composer.value, cursor));
+  updateMention();
+};
+
+const moveVertical = (/** @type {any} */ composer, /** @type {number} */ direction) => {
+  const value = composer.value;
+  const cursor = cursorOf(composer);
+  const start = lineStart(value, cursor);
+  const column = cursor - start;
+
+  if (direction < 0) {
+    if (start === 0) return moveCursorTo(composer, 0);
+    const previousStart = lineStart(value, start - 1);
+    return moveCursorTo(composer, snapBack(value, Math.min(previousStart + column, start - 1)));
+  }
+
+  const end = lineEnd(value, cursor);
+  if (end >= value.length) return moveCursorTo(composer, value.length);
+  const nextStart = end + 1;
+  return moveCursorTo(composer, snapBack(value, Math.min(nextStart + column, lineEnd(value, nextStart))));
 };
 
 /** Keeps a dropped image even before it is read, so the draft shows it at once. */
@@ -552,13 +694,12 @@ const pasteIntoComposer = async (/** @type {string} */ text) => {
   }
 
   // A real paste keeps its line breaks: the composer is a commit body.
-  composer.value += sanitize(text);
-  updateMention();
+  insertAtCursor(composer, sanitize(text));
 };
 
 const startComposer = (/** @type {any} */ replyTo) => {
   stopMentionSearch();
-  state.composer = { replyTo, value: "", busy: null, error: null, images: [], mention: null };
+  state.composer = { replyTo, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
   state.help = false;
   draw();
 };
@@ -598,6 +739,7 @@ async function submit() {
   const pulled = await extractImages(composer.value);
   if (state.composer !== composer) return;
   composer.value = pulled.body;
+  composer.cursor = pulled.body.length;
   if (pulled.images.length) pushAttachments(pulled.images);
 
   const body = composer.value.trim();
@@ -656,16 +798,107 @@ const scrollHalfPage = (/** @type {number} */ direction) => {
   state.selectedId = null;
 };
 
+const ARROW_LEFT = /^\u001b(?:\[[0-9;]*|O)D$/;
+const ARROW_RIGHT = /^\u001b(?:\[[0-9;]*|O)C$/;
+const ARROW_UP = /^\u001b(?:\[[0-9;]*|O)A$/;
+const ARROW_DOWN = /^\u001b(?:\[[0-9;]*|O)B$/;
+const KEY_HOME = /^\u001b(?:\[[0-9;]*|O)H$|^\u001b\[[17]~$/;
+const KEY_END = /^\u001b(?:\[[0-9;]*|O)F$|^\u001b\[[48]~$/;
+const KEY_DELETE = /^\u001b\[3(?:;\d+)*~$/;
+// Kitty's CSI u and xterm's modifyOtherKeys. Herdr sends Shift-Enter the xterm
+// way (CSI 27;2;13~), and Alt-Enter as ESC CR.
+const ENHANCED_KEY = /^\u001b\[(?:27;(\d+);(\d+)~|(\d+)(?:;(\d+))?(?:;[\d:]+)?u)$/;
+
+/** An arrow with Alt or Ctrl skips a word, the way a shell's does. */
+const arrowSkipsWord = (/** @type {string} */ sequence) => {
+  const match = /;(\d+)/.exec(sequence);
+  if (!match) return false;
+  return Boolean(Math.max(0, Number(match[1]) - 1) & (2 | 4));
+};
+
+/**
+ * Keys that arrive as a code plus a modifier bitmask: shift-enter's newline,
+ * Ctrl combinations, Alt words. True when the key was one of them.
+ * @param {any} composer
+ * @param {{code: number, bits: number}} key
+ */
+const applyEnhancedKey = (composer, key) => {
+  const { code, bits } = key;
+  const shift = Boolean(bits & 1);
+  const alt = Boolean(bits & 2);
+  const ctrl = Boolean(bits & 4);
+  const superKey = Boolean(bits & 8);
+  if (superKey) return true;
+
+  if (code === 13) {
+    insertAtCursor(composer, "\n");
+    return true;
+  }
+  if (code === 27) {
+    if (composer.mention) {
+      composer.mention = null;
+      stopMentionSearch();
+      draw();
+    } else {
+      state.composer = null;
+      stopMentionSearch();
+      draw();
+    }
+    return true;
+  }
+  if (code === 9) {
+    if (!shift) insertMention();
+    return true;
+  }
+  if (code === 127) {
+    if (ctrl || alt) deleteWordBackward(composer);
+    else deleteBackward(composer);
+    return true;
+  }
+  if (code >= 64 && code <= 95 && ctrl) {
+    // Ctrl+letter again, as the byte the rest of the editor knows.
+    return typeInComposer(String.fromCharCode(code & 0x1f), "", false), true;
+  }
+  if (alt && (code === 98 || code === 102)) {
+    moveCursorTo(composer, code === 98 ? previousWord(composer.value, cursorOf(composer)) : nextWord(composer.value, cursorOf(composer)));
+    return true;
+  }
+  if (!ctrl && !alt && code >= 32) {
+    insertAtCursor(composer, String.fromCodePoint(code));
+    return true;
+  }
+  return true;
+};
+
 const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /** @type {boolean} */ pasted) => {
   const composer = state.composer;
   if (!composer || composer.busy) return;
 
   if (pasted) return void pasteIntoComposer(text);
 
+  const enhanced = ENHANCED_KEY.exec(key);
+  if (enhanced) {
+    const code = Number(enhanced[3] ?? enhanced[2]);
+    const mods = Number(enhanced[1] ?? enhanced[4] ?? 1);
+    if (applyEnhancedKey(composer, { code, bits: Math.max(0, mods - 1) })) return;
+  }
+
   if (key === "\r") {
     void submit();
     return;
   }
+  if (key === "\n") return insertAtCursor(composer, "\n");
+
+  const cursor = cursorOf(composer);
+  if (ARROW_LEFT.test(key)) return moveCursorTo(composer, arrowSkipsWord(key) ? previousWord(composer.value, cursor) : previousStop(composer.value, cursor));
+  if (ARROW_RIGHT.test(key)) return moveCursorTo(composer, arrowSkipsWord(key) ? nextWord(composer.value, cursor) : nextStop(composer.value, cursor));
+  if (ARROW_UP.test(key)) return moveVertical(composer, -1);
+  if (ARROW_DOWN.test(key)) return moveVertical(composer, 1);
+  if (KEY_HOME.test(key) || key === "\u0001") return moveCursorTo(composer, lineStart(composer.value, cursor));
+  if (KEY_END.test(key) || key === "\u0005") return moveCursorTo(composer, lineEnd(composer.value, cursor));
+  if (KEY_DELETE.test(key) || key === "\u0004") return deleteForward(composer);
+  if (key === "\u000b") return deleteToLineEnd(composer);
+
   if (key === "\u007f" || key === "\b") {
     // On an empty draft, backspace takes the last attachment instead.
     if (!composer.value && composer.images.length) {
@@ -674,15 +907,17 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
       flash(`removed ${removed.name}`);
       return updateMention();
     }
-    composer.value = graphemes(composer.value).slice(0, -1).join("");
-  } else if (key === "\u0015") {
-    composer.value = "";
-  } else if (key === "\u0017") {
-    composer.value = composer.value.replace(/\s*\S*$/, "");
-  } else if (sanitize(text) === text && text >= " " && text !== "\u007f") {
-    composer.value += text;
+    return deleteBackward(composer);
   }
-  updateMention();
+  if (key === "\u0015") {
+    composer.value = "";
+    composer.cursor = 0;
+    return updateMention();
+  }
+  if (key === "\u0017") return deleteWordBackward(composer);
+
+  if (sanitize(text) === text && text >= " " && text !== "\u007f") insertAtCursor(composer, text);
+  else updateMention();
 };
 
 /** @param {string} key @param {string} text */
@@ -690,7 +925,10 @@ function onKey(key, text) {
   if (state.composer) {
     if (key === "\u0003") {
       state.composer.value = "";
+      state.composer.cursor = 0;
       state.composer.error = null;
+      state.composer.mention = null;
+      stopMentionSearch();
       return draw();
     }
     if (key === "\u001b") {
@@ -869,17 +1107,14 @@ function startKeys(/** @type {string} */ startingStash = "") {
 
   /** @param {string} alt */
   const onAlt = (alt) => {
-    if (!state.composer) return;
-    if (alt === "\r") {
-      // Herdr sends Shift-Enter as Alt-Enter (ESC CR): a new line in the body.
-      if (state.composer.busy) return;
-      state.composer.value += "\n";
-      return updateMention();
-    }
-    if (alt === "\u007f" || alt === "\b") {
-      state.composer.value = state.composer.value.replace(/\s*\S*$/, "");
-      updateMention();
-    }
+    const composer = state.composer;
+    if (!composer || composer.busy) return;
+    // Alt-Enter (which Herdr also sends for Shift-Enter): a new line in the body.
+    if (alt === "\r") return insertAtCursor(composer, "\n");
+    if (alt === "\u007f" || alt === "\b") return deleteWordBackward(composer);
+    // Herdr maps Alt-Left and Alt-Right to these, as readline does.
+    if (alt === "b") return moveCursorTo(composer, previousWord(composer.value, cursorOf(composer)));
+    if (alt === "f") return moveCursorTo(composer, nextWord(composer.value, cursorOf(composer)));
   };
 
   const drain = () => {
