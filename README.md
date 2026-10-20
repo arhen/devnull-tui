@@ -5,9 +5,11 @@ The [/dev/null](https://dev-null.sh) commit log, as a timeline in a Herdr pane.
 Every post on /dev/null is a git commit drawn on a rail, coloured by its
 author's lane: a small circle before the name, coloured from the author's real
 picture, the short hash on the right, and bodies with inline code, links,
-quotes, polls, link previews and replies. Enter (or `→`) opens a commit with its
-whole conversation, `←` goes back, and `c` / `R` commit and reply as you, signed
-with your SSH key.
+quotes, polls, link previews and replies. A body longer than five lines is
+clamped in the log, replies included; enter opens the commit with its whole
+conversation. `←` goes back, and `c` / `R` commit and reply as you, signed with
+your SSH key: the composer takes `@` mentions and dropped images, the way the
+website does.
 
 ```
 ⬤ legecha @legecha · 4m                    40dd829
@@ -97,6 +99,22 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `esc` | back one level: reply → its parent → timeline |
 | `q` | close the pane; in a commit, back to the timeline |
 
+## The composer
+
+`c` and `R` open a composer that works like the one on the website:
+
+- `@` tags people. The names on screen come first, then /dev/null's own people
+  search; `↑`/`↓` (or `ctrl+p`/`ctrl+n`) pick one, `tab` or `enter` puts the
+  `@handle` in, `esc` closes the list.
+- Drop an image on the pane, or paste its path. Herdr pastes a dropped file as
+  its path, so a drop, a Finder drag, or a typed `--image`-style path all
+  attach the same way: JPEG, PNG or WebP up to 10 MB, at most 3 a commit, told
+  apart by their bytes rather than their extension. Videos, GIFs, SVG and
+  HEIC are refused with the reason, as /dev/null would refuse them. On an empty
+  draft, backspace removes the last image.
+- `enter` sends, `shift+enter` starts a new line, `esc` cancels, `ctrl+u`
+  clears the draft.
+
 ## Starring and deleting
 
 Stars, pastéis, follows, bookmarks and deletes are not part of the commit
@@ -125,8 +143,11 @@ and sent with `X-Devnull-Timestamp`, `X-Devnull-Nonce` and `X-SSH-Signature`.
    user. Public keys are public; nothing else leaves your machine.
 2. It signs `timestamp\nnonce\nreply-to\nbody` with
    `ssh-keygen -Y sign -n devnull-commit`, so your private key — held by
-   1Password or ssh-agent — never leaves the agent.
-3. It posts the payload and the signature to `/api/cli/commits`.
+   1Password or ssh-agent — never leaves the agent. With images the payload
+   gains a line of their SHA-256s and the signature moves to
+   `devnull-commit-images`; the images themselves go up as a multipart form
+   next to the signed payload, exactly like the script's `--image`.
+3. It posts the payload, the images and the signature to `/api/cli/commits`.
 
 Stars, pastéis, follows and bookmarks are **not** available here: /dev/null
 only accepts them from an approved device (a key you approve under
@@ -176,10 +197,11 @@ There is no build step and no runtime dependency: Herdr launches
 | --- | --- |
 | `herdr-plugin.toml` | pane, actions, keybinding target |
 | `index.js` | state machine: timeline, thread, composer, keys, polling |
-| `lib/draw.js` | rows, rails, avatars, links, thread and chrome |
+| `lib/draw.js` | rows, rails, avatars, links, thread, composer and chrome |
 | `lib/devnull.js` | page JSON → commits, threads |
 | `lib/avatars.js` | GitHub avatar photo → one colour sample for the dot, cached in `HERDR_PLUGIN_STATE_DIR` |
-| `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply |
+| `lib/attachments.js` | dropped paths → readable images, by sniffed content, under /dev/null's limits |
+| `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply with images |
 | `lib/jpeg.js` | the baseline JPEG decoder GitHub's photo avatars need |
 | `lib/pane-id.js` | finds an already-open feed pane for `open.sh` |
 | `lib/text.js` | display width, wrapping, link detection |

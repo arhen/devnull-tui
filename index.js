@@ -4,8 +4,9 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
+import { MAX_IMAGES, droppedPaths, extractImages, readAttachment } from "./lib/attachments.js";
 import * as device from "./lib/device.js";
-import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
+import { LOGS, fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
 import { clean, graphemes, sanitize } from "./lib/text.js";
 
@@ -168,6 +169,7 @@ const back = () => {
   }
   if (state.composer) {
     state.composer = null;
+    stopMentionSearch();
     return draw();
   }
   if (state.mode !== "thread") return;
@@ -288,7 +290,7 @@ const toggleStar = async (/** @type {any} */ commit) => {
       const url = await device.authorizationUrl();
       await openInBrowserTab(url);
       state.pendingStar = commit;
-      state.composer = { kind: "device", replyTo: null, value: "", busy: null, error: null };
+      state.composer = { kind: "device", replyTo: null, value: "", busy: null, error: null, images: [], mention: null };
       flash("approve in the browser, then paste the code");
     } catch (error) {
       flash(clean(error instanceof Error ? error.message : String(error)));
@@ -336,8 +338,227 @@ const removeSelected = async () => {
   }
 };
 
+const MAX_SUGGESTIONS = 6;
+// The "@handle" being typed right before the caret, by /dev/null's own rule:
+// an email, a path or a domain is not a mention.
+const MENTION_AT_END = /(?:^|[^\p{L}\p{N}_./@-])@([A-Za-z0-9][A-Za-z0-9-]{0,38}|)$/u;
+
+/** @param {string} value */
+const mentionAt = (value) => {
+  const match = MENTION_AT_END.exec(value);
+  if (!match) return null;
+  return { start: value.length - match[1].length - 1, query: match[1] };
+};
+
+/** The people already on screen: the thread's own first, then the feed's. */
+const knownUsers = () => {
+  /** @type {Map<string, {username: string, name: string}>} */
+  const seen = new Map();
+  const add = (/** @type {any} */ user) => {
+    const username = clean(user?.username ?? "");
+    if (!username || seen.has(username.toLowerCase())) return;
+    seen.set(username.toLowerCase(), { username, name: clean(user?.name ?? "") });
+  };
+  if (state.thread?.root) add(state.thread.root.author);
+  for (const reply of state.thread?.replies ?? []) add(reply.author);
+  for (const commit of state.commits) add(commit.author);
+  return [...seen.values()];
+};
+
+/**
+ * The people whose handle or name matches, the way /dev/null's own suggestions
+ * order them: an exact handle, then handles that start with the term, then names.
+ * @param {{username: string, name: string}[]} users
+ * @param {string} query
+ */
+const matchingUsers = (users, query) => {
+  const term = query.toLowerCase();
+  if (!term) return users.slice(0, MAX_SUGGESTIONS);
+
+  /** @type {{user: {username: string, name: string}, score: number}[]} */
+  const scored = [];
+  for (const user of users) {
+    const username = user.username.toLowerCase();
+    const name = user.name.toLowerCase();
+    const score = username === term ? 0
+      : username.startsWith(term) ? 1
+      : username.includes(term) ? 2
+      : name.startsWith(term) ? 3
+      : name.includes(term) ? 4
+      : -1;
+    if (score >= 0) scored.push({ user, score });
+  }
+  scored.sort((left, right) => left.score - right.score || left.user.username.localeCompare(right.user.username));
+  return scored.slice(0, MAX_SUGGESTIONS).map((entry) => entry.user);
+};
+
+/** Fresh search hits go behind the people already on screen, never in front. */
+const mergeUsers = (/** @type {{username: string, name: string}[]} */ first, /** @type {{username: string, name: string}[]} */ second) => {
+  const seen = new Set(first.map((user) => user.username.toLowerCase()));
+  const out = [...first];
+  for (const user of second) {
+    const key = user.username.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(user);
+  }
+  return out.slice(0, MAX_SUGGESTIONS);
+};
+
+/** @type {NodeJS.Timeout|null} */
+let mentionTimer = null;
+let mentionFetch = 0;
+
+const stopMentionSearch = () => {
+  if (mentionTimer) clearTimeout(mentionTimer);
+  mentionTimer = null;
+  mentionFetch += 1;
+};
+
+/** Recomputes the @ completion from the draft's tail, and searches when it is a real term. */
+const updateMention = () => {
+  const composer = state.composer;
+  if (!composer) return;
+  stopMentionSearch();
+
+  const trigger = composer.kind === "device" ? null : mentionAt(composer.value);
+  if (!trigger) {
+    composer.mention = null;
+    return draw();
+  }
+
+  const previous = composer.mention;
+  const same = Boolean(previous && previous.query === trigger.query);
+  const users = same ? mergeUsers(previous.users, matchingUsers(knownUsers(), trigger.query)) : matchingUsers(knownUsers(), trigger.query);
+
+  composer.mention = {
+    start: trigger.start,
+    query: trigger.query,
+    users,
+    index: same ? Math.min(previous.index, Math.max(0, users.length - 1)) : 0,
+    loading: trigger.query.length > 0,
+  };
+  draw();
+
+  // A bare "@" offers the people on screen; /dev/null's search needs a term.
+  if (!trigger.query) return;
+
+  const query = trigger.query;
+  const token = mentionFetch;
+  mentionTimer = setTimeout(() => {
+    mentionTimer = null;
+    void searchUsers(query)
+      .then((found) => {
+        if (token !== mentionFetch || state.composer !== composer || composer.mention?.query !== query) return;
+        composer.mention.users = mergeUsers(matchingUsers(knownUsers(), query), found);
+        composer.mention.index = Math.min(composer.mention.index, Math.max(0, composer.mention.users.length - 1));
+        composer.mention.loading = false;
+        draw();
+      })
+      .catch(() => {
+        if (token !== mentionFetch || state.composer !== composer || composer.mention?.query !== query) return;
+        composer.mention.loading = false;
+        draw();
+      });
+  }, 140);
+};
+
+/** Replaces the half-typed handle with the chosen person's and a space. */
+const insertMention = () => {
+  const composer = state.composer;
+  const mention = composer?.mention;
+  const user = mention?.users?.[mention.index];
+  if (!composer || !mention || !user) return false;
+
+  composer.value = `${composer.value.slice(0, mention.start)}@${user.username} `;
+  composer.mention = null;
+  composer.error = null;
+  stopMentionSearch();
+  draw();
+  return true;
+};
+
+/** Keeps a dropped image even before it is read, so the draft shows it at once. */
+const pushAttachments = (/** @type {any[]} */ images) => {
+  const composer = state.composer;
+  if (!composer) return [];
+
+  /** @type {any[]} */
+  const kept = [];
+  for (const image of images) {
+    if (composer.images.length >= MAX_IMAGES) break;
+    if (composer.images.some((/** @type {any} */ existing) => existing.path === image.path)) continue;
+    composer.images.push(image);
+    kept.push(image);
+  }
+  return kept;
+};
+
+/**
+ * Reads the files a drop or a paste named, and shows them in the composer.
+ * Returns how many were attached; quiet leaves no error when nothing was, so a
+ * paste of plain file names stays text.
+ * @param {string[]} paths
+ * @param {{quiet?: boolean}} [options]
+ */
+const attach = async (paths, { quiet = false } = {}) => {
+  const composer = state.composer;
+  if (!composer || composer.busy) return 0;
+
+  if (composer.images.length >= MAX_IMAGES) {
+    if (!quiet) composer.error = `a commit carries up to ${MAX_IMAGES} images`;
+    draw();
+    return 0;
+  }
+
+  /** @type {any[]} */
+  const images = [];
+  /** @type {string|null} */
+  let error = null;
+
+  for (const path of paths) {
+    if (composer.images.length + images.length >= MAX_IMAGES) {
+      error ??= `up to ${MAX_IMAGES} images per commit`;
+      break;
+    }
+    if (composer.images.some((/** @type {any} */ image) => image.path === path)) continue;
+
+    const found = await readAttachment(path);
+    if (state.composer !== composer) return 0;
+    if (found.image) images.push(found.image);
+    else error ??= found.error ?? "could not read that image";
+  }
+
+  const kept = pushAttachments(images);
+  composer.error = quiet && !kept.length ? null : error;
+  if (kept.length === 1) flash(`attached ${kept[0].name}`);
+  else if (kept.length > 1) flash(`attached ${kept.length} images`);
+  updateMention();
+  return kept.length;
+};
+
+/** A drop arrives as a paste of the file's path; prose pastes stay prose. */
+const pasteIntoComposer = async (/** @type {string} */ text) => {
+  const composer = state.composer;
+  if (!composer || composer.busy) return;
+
+  const paths = await droppedPaths(text);
+  if (state.composer !== composer) return;
+  if (paths?.length) {
+    // One path is a drop and says what is wrong with it; a list of plain files
+    // is a paste of names and stays text.
+    const attached = await attach(paths, { quiet: paths.length > 1 });
+    if (attached || paths.length === 1) return;
+  }
+
+  // A real paste keeps its line breaks: the composer is a commit body.
+  composer.value += sanitize(text);
+  updateMention();
+};
+
 const startComposer = (/** @type {any} */ replyTo) => {
-  state.composer = { replyTo, value: "", busy: null, error: null };
+  stopMentionSearch();
+  state.composer = { replyTo, value: "", busy: null, error: null, images: [], mention: null };
   state.help = false;
   draw();
 };
@@ -345,17 +566,18 @@ const startComposer = (/** @type {any} */ replyTo) => {
 async function submit() {
   const composer = state.composer;
   if (!composer || composer.busy) return;
-  const body = composer.value.trim();
-  if (!body) {
-    composer.error = "nothing to send";
-    return draw();
-  }
 
   if (composer.kind === "device") {
+    const code = composer.value.trim();
+    if (!code) {
+      composer.error = "nothing to send";
+      return draw();
+    }
+
     composer.busy = "approving…";
     draw();
     try {
-      await device.redeem(body);
+      await device.redeem(code);
       state.composer = null;
       flash("device approved ✓");
       const pending = state.pendingStar;
@@ -371,12 +593,29 @@ async function submit() {
     return;
   }
 
-  composer.busy = "signing…";
+  // A drop can arrive as typed characters when nothing wrapped it in a paste:
+  // pull the images out of the draft and leave the words.
+  const pulled = await extractImages(composer.value);
+  if (state.composer !== composer) return;
+  composer.value = pulled.body;
+  if (pulled.images.length) pushAttachments(pulled.images);
+
+  const body = composer.value.trim();
+  if (!body) {
+    composer.error = composer.images.length
+      ? "add a line of text — /dev/null needs a commit message"
+      : "nothing to send";
+    return draw();
+  }
+
+  composer.busy = composer.images.length ? "signing and uploading…" : "signing…";
   composer.error = null;
+  composer.mention = null;
+  stopMentionSearch();
   draw();
 
   try {
-    const answer = await postCommit({ body, replyTo: composer.replyTo?.permalink ?? null });
+    const answer = await postCommit({ body, replyTo: composer.replyTo?.permalink ?? null, images: composer.images });
     const handle = /@([\w.-]+)\/commits/.exec(answer);
     if (handle) state.me = handle[1];
     if (state.composer === composer) state.composer = null;
@@ -421,13 +660,20 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
   const composer = state.composer;
   if (!composer || composer.busy) return;
 
-  if (pasted) {
-    // Keep a pasted space that follows typed text: no trim on either side.
-    composer.value += sanitize(text).replace(/\s*\n\s*/g, " ");
-  } else if (key === "\r") {
+  if (pasted) return void pasteIntoComposer(text);
+
+  if (key === "\r") {
     void submit();
     return;
-  } else if (key === "\u007f" || key === "\b") {
+  }
+  if (key === "\u007f" || key === "\b") {
+    // On an empty draft, backspace takes the last attachment instead.
+    if (!composer.value && composer.images.length) {
+      const removed = composer.images.pop();
+      composer.error = null;
+      flash(`removed ${removed.name}`);
+      return updateMention();
+    }
     composer.value = graphemes(composer.value).slice(0, -1).join("");
   } else if (key === "\u0015") {
     composer.value = "";
@@ -436,7 +682,7 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
   } else if (sanitize(text) === text && text >= " " && text !== "\u007f") {
     composer.value += text;
   }
-  draw();
+  updateMention();
 };
 
 /** @param {string} key @param {string} text */
@@ -452,8 +698,30 @@ function onKey(key, text) {
         flash("posting — it cannot be cancelled");
         return;
       }
+      // Esc first closes the people list, then the composer.
+      if (state.composer.mention) {
+        state.composer.mention = null;
+        stopMentionSearch();
+        return draw();
+      }
       state.composer = null;
+      stopMentionSearch();
       return draw();
+    }
+
+    const mention = state.composer.mention;
+    if (mention?.users?.length) {
+      if (key === "\u001b[A" || key === "\u001bOA" || key === "\u0010") {
+        mention.index = (mention.index - 1 + mention.users.length) % mention.users.length;
+        return draw();
+      }
+      if (key === "\u001b[B" || key === "\u001bOB" || key === "\u000e") {
+        mention.index = (mention.index + 1) % mention.users.length;
+        return draw();
+      }
+      if (key === "\t" || key === "\r") {
+        if (insertMention()) return;
+      }
     }
     return typeInComposer(key, text, false);
   }
@@ -602,9 +870,15 @@ function startKeys(/** @type {string} */ startingStash = "") {
   /** @param {string} alt */
   const onAlt = (alt) => {
     if (!state.composer) return;
+    if (alt === "\r") {
+      // Herdr sends Shift-Enter as Alt-Enter (ESC CR): a new line in the body.
+      if (state.composer.busy) return;
+      state.composer.value += "\n";
+      return updateMention();
+    }
     if (alt === "\u007f" || alt === "\b") {
       state.composer.value = state.composer.value.replace(/\s*\S*$/, "");
-      draw();
+      updateMention();
     }
   };
 
