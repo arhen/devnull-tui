@@ -1,0 +1,19 @@
+{
+  "name": "herdr-plugin-devnull",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The /dev/null commit log as a timeline, in a Herdr pane",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,30 @@
+id = "devnull.feed"
+name = "/dev/null feed"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "The /dev/null commit log as a timeline, in a Herdr pane"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "feed"
+title = "/dev/null"
+placement = "split"
+command = ["/bin/sh", "run.sh"]
+
+[[actions]]
+id = "open"
+title = "Open the /dev/null feed"
+contexts = ["pane", "workspace"]
+command = ["/bin/sh", "open.sh"]
+
+[[actions]]
+id = "latest"
+title = "Print the /dev/null Latest log"
+contexts = ["pane", "workspace"]
+command = ["/bin/sh", "run.sh", "--once", "--log", "latest"]
+
+[[actions]]
+id = "trending"
+title = "Print the /dev/null Trending log"
+contexts = ["pane", "workspace"]
+command = ["/bin/sh", "run.sh", "--once", "--log", "trending"]
