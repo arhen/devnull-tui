@@ -42,6 +42,8 @@ A commit opened with its replies, and the hint bar for the keys that work there:
 your GitHub account — held by your agent (1Password, ssh-agent) or as a file
 without a passphrase — for committing and replying. FIDO `sk-*` keys and
 ECDSA keys are not accepted by /dev/null. Reading needs none of this.
+- Following and the inbox are the user's own, so they need an approved device
+(the same one-time approval stars and deletes use: press `s`).
 
 ## Install
 
@@ -96,18 +98,26 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `g` / `G` | first / last commit |
 | `ctrl+d` / `ctrl+u` | half a page |
 | `enter` | open the commit and its conversation (same as `→`) |
-| `e` | expand the selected reply's own replies |
+| `e` | expand the selected reply's own replies, or a group in the inbox |
 | `R` | reply to the selected commit |
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
 | `a` | avatars: colour dots on / off |
-| `s` | star or unstar the selected commit (needs a device once) |
+| `s` | star or unstar the selected commit · approve this pane as a device |
 | `d` | delete one of your own commits, twice to confirm |
-| `r` | refresh |
-| `t` / `1` / `2` | latest / trending |
+| `r` | refresh the open tab |
+| `1` / `2` / `3` / `4` | following · latest · trending · notifications |
+| `n` | jump to notifications from anywhere |
+| `t` | latest / trending |
 | `?` | keys |
 | `esc` | back one level: reply → its parent → timeline |
 | `q` | close the pane; in a commit, back to the timeline |
+
+The tab row numbers the tabs with the keys that open them, so `1` following,
+`2` latest, `3` trending, `4` notifications. Following and the inbox are read
+from the signed API: without a device the tab says so and `s` starts the
+approval. The inbox refreshes only while it is on screen, because listing
+notifications marks them read on /dev/null, as it does on the web.
 
 ## The composer
 
@@ -143,8 +153,8 @@ flow the mobile app uses:
    which no app has to open.
 3. Paste that code (or the whole redirected URL) into the pane.
 
-From then on `s` stars and unstars, and `d` deletes your own commits (twice to
-confirm). Every call is signed as
+From then on `s` stars and unstars, `d` deletes your own commits (twice to
+confirm), and the Following tab and the inbox open. Every call is signed as
 `timestamp\nnonce\nMETHOD\npath\nbody` with `ssh-keygen -Y sign -n devnull-api`
 and sent with `X-Devnull-Timestamp`, `X-Devnull-Nonce` and `X-SSH-Signature`.
 
@@ -179,8 +189,21 @@ no cookie jar, and no scraping of private state:
 - `https://dev-null.sh/@user/commits/{id}` with
   `Cookie: replies_per_page=25`: a commit and its replies, one page at a time.
 
-`Following` needs your session and is not offered. The timeline refreshes every
-60 seconds; `--interval` changes that.
+Following and the inbox are the user's own, so they come from the signed API
+the mobile app uses, with the device key the pane already has:
+
+- `/api/v1/log/following`: the commits of the people you follow, plus
+  `/dev/null`'s suggestions while the log is empty.
+- `/api/v1/notifications?type=all`: the inbox grouped and filtered the way the
+  web groups it — follows, stars, replies, quotes, mentions, moderation and
+  level-ups, each group with its actors, its event and unread counts, and the
+  commit it happened to.
+- `/api/v1/notifications/{id}/group?type=all`: the events `e` opens under a
+  group.
+
+Listing notifications marks them read, as on the web, so the pane only asks
+while the inbox tab is open. The open tab refreshes every 60 seconds;
+`--interval` changes that.
 
 ## Text mode
 
@@ -189,11 +212,13 @@ colour codes and no key hints:
 
 ```sh
 node index.js --once --log latest --width 100
+node index.js --once --log notifications   # the inbox, as text
 node index.js --once                 # one text frame, when piped
 ```
 
 `herdr plugin action invoke devnull.feed.latest` prints the same into the
-plugin log (`herdr plugin log list --plugin devnull.feed`).
+plugin log (`herdr plugin log list --plugin devnull.feed`); `following` and
+`notifications` are actions too.
 
 ## Development
 
@@ -212,8 +237,9 @@ There is no build step and no runtime dependency: Herdr launches
 | --- | --- |
 | `herdr-plugin.toml` | pane, actions, keybinding target |
 | `index.js` | state machine: timeline, thread, composer, keys, polling |
-| `lib/draw.js` | rows, rails, avatars, links, thread, composer and chrome |
+| `lib/draw.js` | rows, rails, avatars, links, thread, inbox, composer and chrome |
 | `lib/devnull.js` | page JSON → commits, threads |
+| `lib/api.js` | device-signed Following and notifications → the same shape |
 | `lib/avatars.js` | GitHub avatar photo → one colour sample for the dot, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/attachments.js` | dropped paths → readable images, by sniffed content, under /dev/null's limits |
 | `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply with images |

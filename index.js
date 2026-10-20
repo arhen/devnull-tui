@@ -5,9 +5,10 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
 import { MAX_IMAGES, droppedPaths, extractImages, readAttachment } from "./lib/attachments.js";
+import { fetchFollowing, fetchNotificationGroup, fetchNotifications } from "./lib/api.js";
 import * as device from "./lib/device.js";
-import { LOGS, fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
-import { renderOnce, renderScreen } from "./lib/draw.js";
+import { fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
+import { TABS, renderOnce, renderScreen } from "./lib/draw.js";
 import { clean, graphemes, sanitize } from "./lib/text.js";
 
 const args = process.argv.slice(2);
@@ -24,15 +25,24 @@ const flag = (name, fallback = null) => {
 };
 
 const once = args.includes("--once");
-const wantedLog = String(flag("log", "latest"));
-const initialLog = LOGS.includes(wantedLog) ? wantedLog : "latest";
+const wantedTab = String(flag("log", "latest"));
+const initialTab = TABS.includes(wantedTab) ? wantedTab : "latest";
 const interval = Math.max(15, Number(flag("interval", 60)) || 60);
 
 /** @type {any} */
 const state = {
   mode: "timeline",
-  log: initialLog,
+  tab: initialTab,
   commits: [],
+  notifications: {
+    groups: /** @type {any[]} */ ([]),
+    items: /** @type {{notification: any, depth: number, childrenLoaded?: boolean}[]} */ ([]),
+    readAt: null,
+    nextCursor: null,
+    fetchedAt: 0,
+    expanded: /** @type {Map<string, any[]>} */ (new Map()),
+  },
+  gate: null,
   thread: null,
   threadStack: [],
   timelineIndex: 0,
@@ -73,25 +83,86 @@ const selectedCommit = () => {
     if (!state.thread?.root) return null;
     return state.thread.root.id === state.selectedId ? state.thread.root : state.thread.replies.find((/** @type {any} */ reply) => reply.id === state.selectedId) ?? state.thread.root;
   }
+  if (state.tab === "notifications") return null;
   return state.commits[state.selectedIndex] ?? null;
+};
+
+const selectedNotification = () =>
+  state.tab === "notifications" && state.mode !== "thread"
+    ? state.notifications.items[state.selectedIndex]?.notification ?? null
+    : null;
+
+/** The commit the keys act on: the inbox's commit, or the log's selection. */
+const selectedSubject = () => selectedNotification()?.commit ?? selectedCommit();
+
+/** Following and the inbox are the user's own, so they need an approved device. */
+const needsDevice = () => state.tab === "following" || state.tab === "notifications";
+
+/** The flattened inbox: a group, then the members `e` opened under it. */
+const rebuildNotifications = () => {
+  const inbox = state.notifications;
+  const selected = inbox.items[state.selectedIndex]?.notification ?? null;
+  /** @type {{notification: any, depth: number, childrenLoaded?: boolean}[]} */
+  const items = [];
+
+  for (const group of inbox.groups) {
+    const members = inbox.expanded.get(group.groupId);
+    items.push({ notification: group, depth: 0, childrenLoaded: Array.isArray(members) });
+    for (const member of members ?? []) items.push({ notification: member, depth: 1 });
+  }
+
+  inbox.items = items;
+  const kept = selected ? items.findIndex((item) => item.notification.id === selected.id) : -1;
+  const keptGroup = kept < 0 && selected ? items.findIndex((item) => item.notification.groupId === selected.groupId) : -1;
+  const index = kept >= 0 ? kept : keptGroup >= 0 ? keptGroup : Math.min(state.selectedIndex, Math.max(0, items.length - 1));
+  state.selectedIndex = index;
+  if (state.mode === "timeline") state.timelineIndex = index;
+  state.selectedId = items[index]?.notification.id ?? null;
 };
 
 async function refresh({ quiet = false } = {}) {
   if (refreshing && quiet) return;
+
+  if (needsDevice() && !device.hasDevice()) {
+    state.gate = state.tab;
+    state.loading = false;
+    state.error = null;
+    draw();
+    return;
+  }
+  state.gate = null;
+
   const token = ++fetchSeq;
-  const log = state.log;
-  const previousIds = new Set(state.commits.map((/** @type {any} */ commit) => commit.id));
+  const tab = state.tab;
   if (!quiet) flash("refreshing…");
   refreshing = true;
 
   try {
-    const result = await fetchLog(log);
-    if (token !== fetchSeq || log !== state.log) return;
+    if (tab === "notifications") {
+      const result = await fetchNotifications();
+      if (token !== fetchSeq || tab !== state.tab) return;
+
+      state.notifications.groups = result.notifications;
+      state.notifications.readAt = result.readAt;
+      state.notifications.nextCursor = result.nextCursor;
+      state.notifications.fetchedAt = result.fetchedAt;
+      state.notifications.expanded.clear();
+      rebuildNotifications();
+      state.fetchedAt = result.fetchedAt;
+      state.loading = false;
+      state.error = null;
+      if (Date.now() > flashUntil) state.status = null;
+      return;
+    }
+
+    const result = tab === "following" ? await fetchFollowing() : await fetchLog(tab);
+    if (token !== fetchSeq || tab !== state.tab) return;
 
     // The user may have moved while the request was in flight: anchor on what
     // is selected now, and only rewrite the timeline's selection.
     const selected = state.commits[state.mode === "timeline" ? state.selectedIndex : state.timelineIndex];
     const kept = selected ? result.commits.findIndex((/** @type {any} */ commit) => commit.id === selected.id) : -1;
+    const previousIds = new Set(state.commits.map((/** @type {any} */ commit) => commit.id));
 
     state.commits = result.commits;
     state.fetchedAt = result.fetchedAt;
@@ -187,7 +258,45 @@ const back = () => {
   draw();
 };
 
+const expandNotification = async () => {
+  const item = state.notifications.items[state.selectedIndex] ?? null;
+  if (!item || item.depth > 0) {
+    flash("nothing to expand");
+    return;
+  }
+
+  const notification = item.notification;
+  const inbox = state.notifications;
+  if (inbox.expanded.has(notification.groupId)) {
+    inbox.expanded.delete(notification.groupId);
+    rebuildNotifications();
+    return draw();
+  }
+  if (notification.eventCount <= 1 && notification.actorsCount <= 1) {
+    flash("nothing to expand");
+    return;
+  }
+
+  flash(`loading ${notification.eventCount} ${notification.eventCount === 1 ? "event" : "events"}…`);
+  try {
+    const members = await fetchNotificationGroup(notification);
+    if (state.tab !== "notifications") return;
+    if (!members.length) {
+      flash("this group has nothing more to show");
+      return;
+    }
+    inbox.expanded.set(notification.groupId, members);
+    rebuildNotifications();
+    if (Date.now() > flashUntil) state.status = null;
+  } catch (error) {
+    flash(clean(error instanceof Error ? error.message : String(error)));
+    return;
+  }
+  draw();
+};
+
 const expand = async () => {
+  if (state.tab === "notifications" && state.mode !== "thread") return expandNotification();
   const commit = selectedCommit();
   const thread = state.thread;
   if (!thread || !commit || !commit.replies) {
@@ -273,30 +382,35 @@ async function openInBrowserTab(/** @type {string} */ url) {
   return spawnDetached(fallback, [url]);
 }
 
+/** Starts the one-time approval of this pane as a /dev/null device. */
+async function approveDevice(/** @type {any} */ after = null) {
+  try {
+    const url = await device.authorizationUrl();
+    await openInBrowserTab(url);
+    state.pendingStar = after;
+    state.composer = { kind: "device", replyTo: null, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
+    flash("approve in the browser, then paste the code");
+  } catch (error) {
+    flash(clean(error instanceof Error ? error.message : String(error)));
+  }
+  draw();
+}
+
 async function openSelected() {
-  const commit = selectedCommit();
-  if (!commit) return;
-  flash(`opening @${clean(commit.author.username)}…`);
-  const opened = await openInBrowserTab(commit.permalink);
-  flash(opened ? `opened @${clean(commit.author.username)}` : commit.permalink);
+  const notification = selectedNotification();
+  const commit = selectedSubject();
+  const url = commit?.permalink ?? notification?.actor.permalink ?? null;
+  if (!url) return;
+  flash("opening…");
+  const opened = await openInBrowserTab(url);
+  flash(opened ? "opened in the browser" : url);
 }
 
 const isStarred = (/** @type {any} */ commit) => Boolean(commit.starred);
 
 const toggleStar = async (/** @type {any} */ commit) => {
   if (!commit) return;
-  if (!device.hasDevice()) {
-    try {
-      const url = await device.authorizationUrl();
-      await openInBrowserTab(url);
-      state.pendingStar = commit;
-      state.composer = { kind: "device", replyTo: null, value: "", cursor: 0, busy: null, error: null, images: [], mention: null };
-      flash("approve in the browser, then paste the code");
-    } catch (error) {
-      flash(clean(error instanceof Error ? error.message : String(error)));
-    }
-    return;
-  }
+  if (!device.hasDevice()) return void approveDevice(commit);
 
   const on = isStarred(commit);
   try {
@@ -312,7 +426,7 @@ const toggleStar = async (/** @type {any} */ commit) => {
 };
 
 const removeSelected = async () => {
-  const commit = selectedCommit();
+  const commit = selectedSubject();
   if (!commit) return;
   if (!device.hasDevice()) {
     flash("deletes need an approved device: press s once to approve one");
@@ -724,6 +838,7 @@ async function submit() {
       const pending = state.pendingStar;
       state.pendingStar = null;
       if (pending) await toggleStar(pending);
+      else if (needsDevice()) void refresh();
     } catch (error) {
       if (state.composer === composer) {
         composer.busy = null;
@@ -976,6 +1091,10 @@ function onKey(key, text) {
       if (state.mode === "thread") {
         const commit = selectedCommit();
         if (commit) return void openReply(commit);
+      } else if (state.tab === "notifications") {
+        const commit = selectedNotification()?.commit;
+        if (commit) return openThread(commit);
+        return void openSelected();
       } else {
         const commit = selectedCommit();
         if (commit) return openThread(commit);
@@ -1017,14 +1136,15 @@ function onKey(key, text) {
     case "e":
       return void expand();
     case "R": {
-      const commit = selectedCommit();
+      const commit = selectedSubject();
       if (commit) return startComposer(commit);
       break;
     }
     case "c":
       return startComposer(null);
     case "s":
-      return void toggleStar(selectedCommit());
+      if (state.gate) return void approveDevice();
+      return void toggleStar(selectedSubject());
     case "d":
       return void removeSelected();
     case "o":
@@ -1033,11 +1153,14 @@ function onKey(key, text) {
       if (state.mode === "thread" && state.thread?.root) return void loadThread(state.thread.root);
       return void refresh();
     case "t":
-      return switchLog(state.log === "latest" ? "trending" : "latest");
+      return switchTab(state.tab === "latest" ? "trending" : "latest");
     case "1":
-      return switchLog("latest");
     case "2":
-      return switchLog("trending");
+    case "3":
+    case "4":
+      return switchTab(TABS[Number(key) - 1]);
+    case "n":
+      return switchTab("notifications");
     case "a":
       state.avatarMode = state.avatarMode === "circle" ? "none" : "circle";
       flash(`avatars: ${state.avatarMode === "circle" ? "colour dots" : "off"}`);
@@ -1054,11 +1177,11 @@ function onKey(key, text) {
   draw();
 }
 
-const switchLog = (/** @type {string} */ log) => {
-  if (state.log === log) return;
+const switchTab = (/** @type {string} */ tab) => {
+  if (state.tab === tab) return;
   loadSeq += 1;
   state.threadStack = [];
-  state.log = log;
+  state.tab = tab;
   state.mode = "timeline";
   state.thread = null;
   state.commits = [];
@@ -1069,6 +1192,8 @@ const switchLog = (/** @type {string} */ log) => {
   state.newCount = 0;
   state.help = false;
   state.loading = true;
+  state.error = null;
+  state.gate = null;
   draw();
   void refresh();
 };
@@ -1177,6 +1302,10 @@ async function main() {
 
   if (once) {
     await refresh({ quiet: true });
+    if (state.gate) {
+      process.stderr.write(`${state.gate} is yours alone, so it needs an approved device: open the pane and press s once.\n`);
+      process.exit(1);
+    }
     if (state.error) {
       process.stderr.write(`${state.error}\n`);
       process.exit(1);

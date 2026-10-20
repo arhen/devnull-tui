@@ -28,3 +28,15 @@ id = "trending"
 title = "Print the /dev/null Trending log"
 contexts = ["pane", "workspace"]
 command = ["/bin/sh", "run.sh", "--once", "--log", "trending"]
+
+[[actions]]
+id = "following"
+title = "Print the /dev/null Following log"
+contexts = ["pane", "workspace"]
+command = ["/bin/sh", "run.sh", "--once", "--log", "following"]
+
+[[actions]]
+id = "notifications"
+title = "Print the /dev/null notifications"
+contexts = ["pane", "workspace"]
+command = ["/bin/sh", "run.sh", "--once", "--log", "notifications"]
