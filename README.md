@@ -148,7 +148,7 @@ Press `s` once and the plugin takes you through that approval, the same PKCE
 flow the mobile app uses:
 
 1. It makes an Ed25519 key under `HERDR_PLUGIN_STATE_DIR` and opens
-   `/mobile-authorization` in your browser.
+   `/mobile/authorize` in your browser.
 2. You approve it there; the browser is redirected to `devnull://device?code=…`,
    which no app has to open.
 3. Paste that code (or the whole redirected URL) into the pane.
