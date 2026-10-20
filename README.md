@@ -3,19 +3,25 @@
 The [/dev/null](https://dev-null.sh) commit log, as a timeline in a Herdr pane.
 
 Every post on /dev/null is a git commit drawn on a rail, coloured by its
-author's lane: avatars as 6×6 half-block pixels, the short hash on the right,
-bodies with inline code, links, quotes, polls, link previews and replies. Enter
-opens a commit with its whole conversation, and `c` / `R` commit and reply as
-you, signed with your SSH key.
+author's lane: an initials chip on the author's colour, the short hash on the
+right, and bodies with inline code, links, quotes, polls, link previews and
+replies. Enter opens a commit with its whole conversation, `c` / `R` commit and
+reply as you, signed with your SSH key.
 
 ```
-▀▀▀▀▀▀ legecha @legecha · 4m                    40dd829
-▀▀▀▀▀▀ I haven't done social media for years.
-▀▀▀▀▀▀ But this feels different.
-│      Hello, World!
-│      ★ 3   ↳ 1
+ RF  legecha @legecha · 4m                    40dd829
+ RF  I haven't done social media for years.
+     But this feels different.
+│    Hello, World!
+│    ★ 3   ↳ 1
 ○
 ```
+
+Avatars have three modes, cycled with `a`: an initials chip on the author's lane
+colour (default), the GitHub picture as a 6×6 half-block image, or nothing.
+The photo mode is charming at close range and costs about three times the
+terminal output per frame, so the chip is what keeps the pane snappy; start
+with `--photos` to open it in photo mode.
 
 ## Requirements
 
@@ -81,6 +87,7 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `R` | reply to the selected commit |
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
+| `a` | avatars: initials chip → tiny photo → none |
 | `r` | refresh |
 | `t` / `1` / `2` | latest / trending |
 | `?` | keys |
@@ -125,7 +132,7 @@ colour codes and no key hints:
 
 ```sh
 node index.js --once --log latest --width 100
-node index.js --once --avatars      # half-block avatars, when piped
+node index.js --once --photos        # half-block avatars, when piped
 ```
 
 `herdr plugin action invoke devnull.feed.latest` prints the same into the
