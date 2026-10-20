@@ -24,6 +24,16 @@ Each author gets a dot in the lane colour, tinted by a colour sampled from
 their real GitHub photo, so the rail still reads as a person and costs two
 columns. `a` turns the dots off and back on.
 
+## Screenshots
+
+The log, latest or trending, 20 commits a page:
+
+![The /dev/null log as a timeline in a Herdr pane: author dots, bodies with link previews, the short hash on the right](docs/feed.png)
+
+A commit opened with its replies, and the hint bar for the keys that work there:
+
+![A commit and its replies in the Herdr pane, with the key hint bar at the bottom](docs/thread.png)
+
 ## Requirements
 
 - Herdr 0.9.0 or newer (`herdr plugin` with pane entrypoints).
