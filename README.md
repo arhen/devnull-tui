@@ -115,9 +115,9 @@ The pane opens as a split beside the calling pane. Agents that install the
 
 The tab row numbers the tabs with the keys that open them, so `1` latest,
 `2` trending, `3` following, `4` notifications — the pane opens on `1`, so a
-fresh install reads the public log before it asks for anything. Following and the inbox are read
-from the signed API: without a device the tab says so and `s` starts the
-approval. The inbox refreshes only while it is on screen, because listing
+fresh install reads the public log before it asks for anything. Following and
+the inbox are read from the signed API: without a device the tab says so and
+`s` starts the approval. The inbox refreshes only while it is on screen, because listing
 notifications marks them read on /dev/null, as it does on the web.
 
 ## The composer
