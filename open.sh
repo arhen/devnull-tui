@@ -7,6 +7,9 @@ cd "$(dirname "$0")"
 
 herdr="${HERDR_BIN_PATH:-herdr}"
 workspace="${HERDR_WORKSPACE_ID:-}"
+if [ -z "$workspace" ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  workspace="$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | sed -n 's/.*"workspace_id":"\([^"]*\)".*/\1/p')"
+fi
 
 if [ -n "$workspace" ]; then
   panes="$("$herdr" pane list --workspace "$workspace" 2> /dev/null || true)"
@@ -15,11 +18,11 @@ else
 fi
 
 if [ -n "$panes" ]; then
-  node="$(./find-node.sh)" || node=""
+  node="$(/bin/sh ./find-node.sh)" || node=""
   if [ -n "$node" ]; then
     existing="$(printf '%s' "$panes" | "$node" lib/pane-id.js)"
-    if [ -n "$existing" ]; then
-      exec "$herdr" plugin pane focus "$existing"
+    if [ -n "$existing" ] && "$herdr" plugin pane focus "$existing"; then
+      exit 0
     fi
   fi
 fi

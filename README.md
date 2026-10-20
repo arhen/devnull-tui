@@ -29,7 +29,8 @@ with `--photos` to open it in photo mode.
 - Node.js 20 or newer (`fetch`, `Intl.Segmenter`).
 - OpenSSH 8.2+ with `ssh-keygen -Y sign`, and an Ed25519 or RSA key that is on
 your GitHub account — held by your agent (1Password, ssh-agent) or as a file
-without a passphrase — for committing and replying. Reading needs neither.
+without a passphrase — for committing and replying. FIDO `sk-*` keys and
+ECDSA keys are not accepted by /dev/null. Reading needs none of this.
 
 ## Install
 
@@ -104,7 +105,7 @@ The pane opens as a split beside the calling pane. Agents that install the
    user. Public keys are public; nothing else leaves your machine.
 2. It signs `timestamp\nnonce\nreply-to\nbody` with
    `ssh-keygen -Y sign -n devnull-commit`, so your private key — held by
-   1Password, ssh-agent or a hardware-backed agent — never leaves it.
+   1Password or ssh-agent — never leaves the agent.
 3. It posts the payload and the signature to `/api/cli/commits`.
 
 Stars, pastéis, follows and bookmarks are **not** available here: /dev/null
@@ -157,7 +158,7 @@ There is no build step and no runtime dependency: Herdr launches
 | `index.js` | state machine: timeline, thread, composer, keys, polling |
 | `lib/draw.js` | rows, rails, avatars, links, thread and chrome |
 | `lib/devnull.js` | page JSON → commits, threads |
-| `lib/avatars.js` | GitHub `?s=6` PNG → half blocks, cached in `HERDR_PLUGIN_STATE_DIR` |
+| `lib/avatars.js` | GitHub `?s=6` PNG or JPEG → half blocks, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply |
 | `lib/jpeg.js` | the baseline JPEG decoder GitHub's photo avatars need |
 | `lib/pane-id.js` | finds an already-open feed pane for `open.sh` |

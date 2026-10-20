@@ -4,11 +4,13 @@ set -e
 
 cd "$(dirname "$0")"
 
-node="$(./find-node.sh)" || {
-  printf 'devnull.feed: could not find node.\n' >&2
-  printf 'Set DEVNULL_NODE=/path/to/node (18 or newer) and reopen the pane.\n' >&2
-  printf 'Press any key to close.\n' >&2
-  read -r _ 2> /dev/null || sleep 60
+node="$(/bin/sh ./find-node.sh)" || {
+  printf 'devnull.feed: could not find node 20 or newer.\n' >&2
+  printf 'Set DEVNULL_NODE=/path/to/node and reopen the pane.\n' >&2
+  if [ -t 0 ]; then
+    printf 'Press Enter to close.\n' >&2
+    read -r _
+  fi
   exit 1
 }
 

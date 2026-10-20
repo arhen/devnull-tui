@@ -7,7 +7,7 @@ import { cleanup, postCommit } from "./lib/auth.js";
 import { avatarRows } from "./lib/avatars.js";
 import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
-import { clean } from "./lib/text.js";
+import { clean, graphemes, sanitize } from "./lib/text.js";
 
 const args = process.argv.slice(2);
 
@@ -78,7 +78,6 @@ async function refresh({ quiet = false } = {}) {
   if (refreshing && quiet) return;
   const token = ++fetchSeq;
   const log = state.log;
-  const selected = state.commits[state.selectedIndex];
   const previousIds = new Set(state.commits.map((/** @type {any} */ commit) => commit.id));
   if (!quiet) flash("refreshing…");
   refreshing = true;
@@ -87,14 +86,22 @@ async function refresh({ quiet = false } = {}) {
     const result = await fetchLog(log);
     if (token !== fetchSeq || log !== state.log) return;
 
+    // The user may have moved while the request was in flight: anchor on what
+    // is selected now, and only rewrite the timeline's selection.
+    const selected = state.commits[state.mode === "timeline" ? state.selectedIndex : state.timelineIndex];
+    const kept = selected ? result.commits.findIndex((/** @type {any} */ commit) => commit.id === selected.id) : -1;
+
     state.commits = result.commits;
     state.fetchedAt = result.fetchedAt;
     state.loading = false;
     state.error = null;
 
-    const kept = selected ? result.commits.findIndex((/** @type {any} */ commit) => commit.id === selected.id) : -1;
-    state.selectedIndex = kept >= 0 ? kept : 0;
-    state.selectedId = result.commits[state.selectedIndex]?.id ?? null;
+    if (state.mode === "timeline") {
+      state.selectedIndex = kept >= 0 ? kept : 0;
+      state.selectedId = result.commits[state.selectedIndex]?.id ?? null;
+    } else {
+      state.timelineIndex = kept >= 0 ? kept : 0;
+    }
     state.newCount =
       previousIds.size > 0 && kept > 0
         ? result.commits.slice(0, kept).filter((/** @type {any} */ commit) => !previousIds.has(commit.id)).length
@@ -218,8 +225,10 @@ const draw = () => {
   state.selectedId = result.selectedId;
   state.blocks = result.blocks;
   if (state.mode === "timeline") state.timelineIndex = result.selectedIndex;
-  process.stdout.write(`\x1b[H${result.lines.map((line) => `${line}\x1b[K`).join("\r\n")}\x1b[J`);
+  process.stdout.write(`\x1b[H${result.lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
 };
+
+state.refresh = draw;
 
 const spawnDetached = (/** @type {string} */ command, /** @type {string[]} */ commandArgs) =>
   new Promise((resolve) => {
@@ -295,8 +304,18 @@ const moveSelection = (/** @type {number} */ delta, /** @type {number} */ max) =
 };
 
 const scrollHalfPage = (/** @type {number} */ direction) => {
-  const half = Math.max(1, Math.floor((state.height - 3) / 2));
+  const bodyHeight = Math.max(1, state.height - 3);
+  const half = Math.max(1, Math.floor(bodyHeight / 2));
   const target = state.offset + direction * half;
+  const current =
+    state.blocks.find((/** @type {any} */ block) => block.id === state.selectedId) ?? state.blocks[state.selectedIndex];
+
+  if (current && current.end - current.start + 1 > bodyHeight) {
+    // A commit taller than the pane scrolls inside itself, keeping the selection.
+    state.offset = Math.max(current.start, Math.min(current.end - bodyHeight + 1, target));
+    return;
+  }
+
   let index = 0;
   for (const block of state.blocks) if (block.start <= target) index = block.index;
   state.selectedIndex = Math.max(0, Math.min(state.blockCount - 1, index));
@@ -308,17 +327,18 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
   if (!composer || composer.busy) return;
 
   if (pasted) {
-    composer.value += clean(text);
+    // Keep a pasted space that follows typed text: no trim on either side.
+    composer.value += sanitize(text).replace(/\s*\n\s*/g, " ");
   } else if (key === "\r") {
     void submit();
     return;
   } else if (key === "\u007f" || key === "\b") {
-    composer.value = [...composer.value].slice(0, -1).join("");
+    composer.value = graphemes(composer.value).slice(0, -1).join("");
   } else if (key === "\u0015") {
     composer.value = "";
   } else if (key === "\u0017") {
     composer.value = composer.value.replace(/\s*\S*$/, "");
-  } else if (text >= " " && text !== "\u007f") {
+  } else if (sanitize(text) === text && text >= " " && text !== "\u007f") {
     composer.value += text;
   }
   draw();
@@ -327,11 +347,11 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
 /** @param {string} key @param {string} text */
 function onKey(key, text) {
   if (state.composer) {
-    if (key === "\u0003") {
-      state.composer = null;
-      return draw();
-    }
-    if (key === "\u001b") {
+    if (key === "\u0003" || key === "\u001b") {
+      if (state.composer.busy) {
+        flash("posting — it cannot be cancelled");
+        return;
+      }
       state.composer = null;
       return draw();
     }
@@ -420,6 +440,8 @@ function onKey(key, text) {
 
 const switchLog = (/** @type {string} */ log) => {
   if (state.log === log) return;
+  loadSeq += 1;
+  state.threadStack = [];
   state.log = log;
   state.mode = "timeline";
   state.thread = null;
@@ -435,7 +457,10 @@ const switchLog = (/** @type {string} */ log) => {
   void refresh();
 };
 
-const restore = () => process.stdout.write("\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h");
+const restore = () => {
+  if (once) return;
+  process.stdout.write("\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h");
+};
 
 const quit = () => {
   cleanup();
@@ -454,16 +479,27 @@ function startKeys() {
   /** @type {NodeJS.Timeout|null} */
   let escapeTimer = null;
 
-  const flushEscape = () => {
-    if (buffer === "\u001b") {
+  /** @param {number} delay */
+  const waitForRest = (delay) => {
+    if (escapeTimer) clearTimeout(escapeTimer);
+    // A lone ESC or half a sequence: drop it rather than run its bytes. A paste
+    // marker may arrive in pieces, so it gets longer than a chord does.
+    escapeTimer = setTimeout(() => {
+      escapeTimer = null;
       buffer = "";
-      onKey("\u001b", "\u001b");
+    }, delay);
+  };
+
+  /** @param {string} alt */
+  const onAlt = (alt) => {
+    if (!state.composer) return;
+    if (alt === "\u007f" || alt === "\b") {
+      state.composer.value = state.composer.value.replace(/\s*\S*$/, "");
+      draw();
     }
   };
 
-  process.stdin.on("data", (chunk) => {
-    buffer += String(chunk);
-
+  const drain = () => {
     while (buffer.length) {
       if (escapeTimer) {
         clearTimeout(escapeTimer);
@@ -472,7 +508,7 @@ function startKeys() {
 
       if (buffer.startsWith("\u001b[200~")) {
         const end = buffer.indexOf("\u001b[201~");
-        if (end === -1) return;
+        if (end === -1) return waitForRest(500);
         const pasted = buffer.slice(6, end);
         buffer = buffer.slice(end + 6);
         if (state.composer) typeInComposer("", pasted, true);
@@ -480,18 +516,19 @@ function startKeys() {
       }
 
       if (buffer[0] === "\u001b") {
-        const csi = /^\u001b[[O][0-9;]*[A-Za-z~]/.exec(buffer) ?? /^\u001bO[A-Za-z]/.exec(buffer);
+        const csi = /^\u001b[[O][0-9;]*[A-Za-z~]/.exec(buffer);
         if (csi) {
           buffer = buffer.slice(csi[0].length);
           onKey(csi[0], csi[0]);
           continue;
         }
-        if (buffer.length === 1) {
-          escapeTimer = setTimeout(flushEscape, 30);
-          return;
-        }
-        buffer = buffer.slice(1);
-        onKey("\u001b", "\u001b");
+        const partialPaste = "\u001b[200~".startsWith(buffer) && buffer.length >= 2;
+        if (partialPaste) return waitForRest(500);
+        if (/^\u001b(\[[0-9;]*|O)?$/.test(buffer)) return waitForRest(100);
+
+        const alt = String.fromCodePoint(/** @type {number} */ (buffer.codePointAt(1)));
+        buffer = buffer.slice(1 + alt.length);
+        onAlt(alt);
         continue;
       }
 
@@ -499,6 +536,18 @@ function startKeys() {
       buffer = buffer.slice(char.length);
       onKey(char, char);
     }
+  };
+
+  process.stdin.on("data", (chunk) => {
+    const text = String(chunk);
+    // A terminal without bracketed paste drops a whole paste in one read, Enter
+    // and all: never let that turn into a signed commit.
+    if (!buffer && !text.startsWith("\u001b") && text.length > 4 && text.includes("\r")) {
+      if (state.composer) typeInComposer("", text, true);
+      return;
+    }
+    buffer += text;
+    drain();
   });
 
   process.stdin.on("end", quit);
