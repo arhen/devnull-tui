@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // @ts-check
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
+import * as device from "./lib/device.js";
 import { avatar } from "./lib/avatars.js";
 import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
@@ -41,12 +42,14 @@ const state = {
   blocks: [],
   offset: 0,
   composer: null,
+  confirm: null,
   newCount: 0,
   status: null,
   error: null,
   help: false,
   loading: true,
   avatarMode: /** @type {"circle"|"photo"|"none"} */ (args.includes("--photos") ? "photo" : "circle"),
+  kitty: false,
   me: null,
   fetchedAt: 0,
   now: Date.now(),
@@ -216,6 +219,24 @@ const expand = async () => {
 };
 
 let painted = /** @type {string[]} */ ([]);
+const transmitted = new Set();
+const placed = new Set();
+
+/** @param {number} id @param {string} data */
+/** @param {number} id @param {string} data */
+const kittyTransmit = (id, data) => {
+  const chunks = [];
+  for (let at = 0; at < data.length; at += 4096) chunks.push(data.slice(at, at + 4096));
+  return chunks
+    .map((chunk, index) => `\x1b_Ga=t,f=100,i=${id},q=2${index < chunks.length - 1 ? ",m=1" : ""};${chunk}\x1b\\`)
+    .join("");
+};
+
+/** @param {number} id */
+const kittyDelete = (id) => `\x1b_Ga=d,d=i,i=${id},q=2\x1b\\`;
+
+/** @param {number} row @param {number} id */
+const kittyPlace = (row, id) => `\x1b[${row};1H\x1b_Ga=p,i=${id},c=2,r=1,q=2\x1b\\`;
 
 const draw = () => {
   if (once) return;
@@ -231,16 +252,79 @@ const draw = () => {
   // Rewrite only the rows that changed: moving the selection repaints two or
   // three rows instead of the whole pane, which is what keeps it instant.
   const lines = result.lines;
+  /** @type {Set<number>} */
+  const changed = new Set();
+  let frame = "";
+
   if (lines.length === painted.length) {
-    let frame = "";
     for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index] !== painted[index]) frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
+      if (lines[index] !== painted[index]) {
+        frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
+        changed.add(index + 1);
+      }
     }
-    if (frame) process.stdout.write(frame);
   } else {
-    process.stdout.write(`\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
+    frame = `\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`;
+    for (let index = 0; index < lines.length; index += 1) changed.add(index + 1);
   }
+
+  // Avatars as real images: transmit once, then put them back on any row that
+  // was just erased (Kitty graphics does not survive a line clear).
+  let graphics = "";
+  const wanted = state.avatarMode === "photo" && state.kitty ? result.graphics : [];
+  const keep = new Set(wanted.map((graphic) => graphic.id));
+
+  for (const id of placed) {
+    if (!keep.has(id)) {
+      graphics += kittyDelete(id);
+      placed.delete(id);
+    }
+  }
+
+  for (const graphic of wanted) {
+    if (!changed.has(graphic.row)) continue;
+    if (!transmitted.has(graphic.id)) {
+      graphics += kittyTransmit(graphic.id, graphic.data);
+      transmitted.add(graphic.id);
+    }
+    graphics += kittyDelete(graphic.id) + kittyPlace(graphic.row, graphic.id);
+    placed.add(graphic.id);
+  }
+
+  if (process.env.DEVNULL_DEBUG) {
+    appendFileSync(
+      "/tmp/devnull-debug.log",
+      `draw mode=${state.avatarMode} kitty=${state.kitty} graphics=${result.graphics.length} changed=${changed.size}\n`,
+    );
+  }
+  if (frame || graphics) process.stdout.write(frame + graphics);
   painted = lines;
+};
+
+/** Asks the terminal whether it speaks the Kitty graphics protocol. */
+const detectKitty = async () => {
+  if (!process.stdin.isTTY) return { kitty: false, stash: "" };
+  let stash = "";
+  return new Promise((resolve) => {
+    let done = false;
+    /** @param {boolean} kitty */
+    const finish = (kitty) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      process.stdin.off("data", onData);
+      resolve({ kitty, stash });
+    };
+    /** @param {Buffer|string} chunk */
+    const onData = (chunk) => {
+      const text = String(chunk);
+      if (text.includes("\u001b_G")) return finish(true);
+      stash += text;
+    };
+    const timer = setTimeout(() => finish(false), 300);
+    process.stdin.on("data", onData);
+    process.stdout.write("\u001b_Gi=1,a=q;AAAA\u001b\\");
+  });
 };
 
 state.refresh = draw;
@@ -276,6 +360,63 @@ async function openSelected() {
   flash(opened ? `opened @${clean(commit.author.username)}` : commit.permalink);
 }
 
+const isStarred = (/** @type {any} */ commit) => Boolean(commit.starred);
+
+const toggleStar = async (/** @type {any} */ commit) => {
+  if (!commit) return;
+  if (!device.hasDevice()) {
+    try {
+      const url = await device.authorizationUrl();
+      await openInBrowserTab(url);
+      state.pendingStar = commit;
+      state.composer = { kind: "device", replyTo: null, value: "", busy: null, error: null };
+      flash("approve in the browser, then paste the code");
+    } catch (error) {
+      flash(clean(error instanceof Error ? error.message : String(error)));
+    }
+    return;
+  }
+
+  const on = isStarred(commit);
+  try {
+    if (on) await device.unstar(commit.id);
+    else await device.star(commit.id);
+    commit.starred = !on;
+    commit.stars = Math.max(0, (commit.stars ?? 0) + (on ? -1 : 1));
+    flash(on ? "unstarred" : "starred ✓");
+  } catch (error) {
+    flash(clean(error instanceof Error ? error.message : String(error)));
+  }
+  draw();
+};
+
+const removeSelected = async () => {
+  const commit = selectedCommit();
+  if (!commit) return;
+  if (!device.hasDevice()) {
+    flash("deletes need an approved device: press s once to approve one");
+    return;
+  }
+
+  const now = Date.now();
+  if (!state.confirm || state.confirm.id !== commit.id || now > state.confirm.until) {
+    state.confirm = { id: commit.id, until: now + 4000 };
+    flash("press d again to delete this commit");
+    return;
+  }
+
+  state.confirm = null;
+  try {
+    await device.remove(commit.id);
+    flash("deleted ✓");
+    if (state.mode === "thread" && state.thread?.root) await loadThread(state.thread.root);
+    else await refresh({ quiet: true });
+  } catch (error) {
+    flash(clean(error instanceof Error ? error.message : String(error)));
+    draw();
+  }
+};
+
 const startComposer = (/** @type {any} */ replyTo) => {
   state.composer = { replyTo, value: "", busy: null, error: null };
   state.help = false;
@@ -289,6 +430,26 @@ async function submit() {
   if (!body) {
     composer.error = "nothing to send";
     return draw();
+  }
+
+  if (composer.kind === "device") {
+    composer.busy = "approving…";
+    draw();
+    try {
+      await device.redeem(body);
+      state.composer = null;
+      flash("device approved ✓");
+      const pending = state.pendingStar;
+      state.pendingStar = null;
+      if (pending) await toggleStar(pending);
+    } catch (error) {
+      if (state.composer === composer) {
+        composer.busy = null;
+        composer.error = clean(error instanceof Error ? error.message : String(error));
+        draw();
+      }
+    }
+    return;
   }
 
   composer.busy = "signing…";
@@ -362,7 +523,12 @@ const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /
 /** @param {string} key @param {string} text */
 function onKey(key, text) {
   if (state.composer) {
-    if (key === "\u0003" || key === "\u001b") {
+    if (key === "\u0003") {
+      state.composer.value = "";
+      state.composer.error = null;
+      return draw();
+    }
+    if (key === "\u001b") {
       if (state.composer.busy) {
         flash("posting — it cannot be cancelled");
         return;
@@ -432,6 +598,10 @@ function onKey(key, text) {
     }
     case "c":
       return startComposer(null);
+    case "s":
+      return void toggleStar(selectedCommit());
+    case "d":
+      return void removeSelected();
     case "o":
       return void openSelected();
     case "r":
@@ -444,8 +614,16 @@ function onKey(key, text) {
     case "2":
       return switchLog("trending");
     case "a":
-      state.avatarMode = state.avatarMode === "circle" ? "photo" : state.avatarMode === "photo" ? "none" : "circle";
+      state.avatarMode =
+        state.avatarMode === "circle"
+          ? state.kitty
+            ? "photo"
+            : "none"
+          : state.avatarMode === "photo"
+            ? "none"
+            : "circle";
       flash(`avatars: ${state.avatarMode}`);
+      painted = [];
       break;
     case "?":
       state.help = !state.help;
@@ -488,14 +666,10 @@ const quit = () => {
   process.exit(0);
 };
 
-function startKeys() {
+function startKeys(/** @type {string} */ startingStash = "") {
   if (!process.stdin.isTTY) return;
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding("utf8");
-  process.stdout.write("\x1b[?2004h\x1b[?7l");
 
-  let buffer = "";
+  let buffer = startingStash;
   /** @type {NodeJS.Timeout|null} */
   let escapeTimer = null;
 
@@ -506,7 +680,10 @@ function startKeys() {
     // marker may arrive in pieces, so it gets longer than a chord does.
     escapeTimer = setTimeout(() => {
       escapeTimer = null;
+      const lone = buffer === "\u001b";
       buffer = "";
+      // A bare Esc is a key; half a sequence is noise.
+      if (lone) onKey("\u001b", "\u001b");
     }, delay);
   };
 
@@ -571,6 +748,7 @@ function startKeys() {
   });
 
   process.stdin.on("end", quit);
+  if (buffer) drain();
 }
 
 async function main() {
@@ -596,6 +774,21 @@ async function main() {
   process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J");
   painted = [];
   process.on("exit", restore);
+
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    process.stdout.write("\x1b[?2004h\x1b[?7l");
+  }
+
+  const probe = await detectKitty();
+  state.kitty = probe.kitty;
+  if (process.env.DEVNULL_DEBUG) {
+    appendFileSync("/tmp/devnull-debug.log", `probe kitty=${probe.kitty} stash=${probe.stash.length}\n`);
+  }
+  if (state.avatarMode === "photo" && !state.kitty) state.avatarMode = "circle";
+
   process.stdout.on("resize", () => {
     state.width = process.stdout.columns || state.width;
     state.height = process.stdout.rows || state.height;
@@ -604,7 +797,7 @@ async function main() {
     draw();
   });
 
-  startKeys();
+  startKeys(probe.stash);
   draw();
   void refresh({ quiet: true });
 

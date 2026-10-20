@@ -90,12 +90,32 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `R` | reply to the selected commit |
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
-| `a` | avatars: colour circle → tiny photo → none |
+| `a` | avatars: colour circle → real photo → none |
+| `s` | star or unstar the selected commit (needs a device once) |
+| `d` | delete one of your own commits, twice to confirm |
 | `r` | refresh |
 | `t` / `1` / `2` | latest / trending |
 | `?` | keys |
 | `esc` | back one level: reply → its parent → timeline |
 | `q` | close the pane; in a commit, back to the timeline |
+
+## Starring and deleting
+
+Stars, pastéis, follows, bookmarks and deletes are not part of the commit
+signature API: /dev/null only accepts them from a device key it has approved.
+Press `s` once and the plugin takes you through that approval, the same PKCE
+flow the mobile app uses:
+
+1. It makes an Ed25519 key under `HERDR_PLUGIN_STATE_DIR` and opens
+   `/mobile-authorization` in your browser.
+2. You approve it there; the browser is redirected to `devnull://device?code=…`,
+   which no app has to open.
+3. Paste that code (or the whole redirected URL) into the pane.
+
+From then on `s` stars and unstars, and `d` deletes your own commits (twice to
+confirm). Every call is signed as
+`timestamp\nnonce\nMETHOD\npath\nbody` with `ssh-keygen -Y sign -n devnull-api`
+and sent with `X-Devnull-Timestamp`, `X-Devnull-Nonce` and `X-SSH-Signature`.
 
 ## Writing
 
