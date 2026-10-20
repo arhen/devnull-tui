@@ -106,15 +106,16 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `s` | star or unstar the selected commit · approve this pane as a device |
 | `d` | delete one of your own commits, twice to confirm |
 | `r` | refresh the open tab |
-| `1` / `2` / `3` / `4` | following · latest · trending · notifications |
+| `1` / `2` / `3` / `4` | latest · trending · following · notifications |
 | `n` | jump to notifications from anywhere |
 | `t` | latest / trending |
 | `?` | keys |
 | `esc` | back one level: reply → its parent → timeline |
 | `q` | close the pane; in a commit, back to the timeline |
 
-The tab row numbers the tabs with the keys that open them, so `1` following,
-`2` latest, `3` trending, `4` notifications. Following and the inbox are read
+The tab row numbers the tabs with the keys that open them, so `1` latest,
+`2` trending, `3` following, `4` notifications — the pane opens on `1`, so a
+fresh install reads the public log before it asks for anything. Following and the inbox are read
 from the signed API: without a device the tab says so and `s` starts the
 approval. The inbox refreshes only while it is on screen, because listing
 notifications marks them read on /dev/null, as it does on the web.
