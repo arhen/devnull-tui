@@ -5,7 +5,7 @@
   "type": "module",
   "description": "The /dev/null commit log as a timeline, in a Herdr pane",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "start": "node index.js",

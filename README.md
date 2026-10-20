@@ -20,9 +20,10 @@ you, signed with your SSH key.
 ## Requirements
 
 - Herdr 0.9.0 or newer (`herdr plugin` with pane entrypoints).
-- Node.js 18 or newer (`fetch`, `Intl.Segmenter`).
-- OpenSSH 8.2+ with `ssh-keygen -Y sign`, and a key that is on your GitHub
-  account, for committing and replying. Reading needs neither.
+- Node.js 20 or newer (`fetch`, `Intl.Segmenter`).
+- OpenSSH 8.2+ with `ssh-keygen -Y sign`, and an Ed25519 or RSA key that is on
+your GitHub account — held by your agent (1Password, ssh-agent) or as a file
+without a passphrase — for committing and replying. Reading needs neither.
 
 ## Install
 
@@ -36,7 +37,7 @@ herdr server reload-config
 From a checkout, while developing:
 
 ```sh
-herdr plugin link ~/Code/personal/herdr-plugin-devnull
+herdr plugin link ~/Code/personal/herdr-devnull-plugin
 ```
 
 ## Open it
@@ -74,7 +75,7 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `t` / `1` / `2` | latest / trending |
 | `?` | keys |
 | `esc` | back to the timeline |
-| `q` | close the pane |
+| `q` | close the pane; in a commit, back to the timeline |
 
 ## Writing
 
@@ -85,8 +86,8 @@ The pane opens as a split beside the calling pane. Agents that install the
    `/api/cli/key-lookups` which of them is on the GitHub account of a /dev/null
    user. Public keys are public; nothing else leaves your machine.
 2. It signs `timestamp\nnonce\nreply-to\nbody` with
-   `ssh-keygen -Y sign -n devnull-commit`, so your private key — a 1Password or
-   hardware key included — never leaves the agent.
+   `ssh-keygen -Y sign -n devnull-commit`, so your private key — held by
+   1Password, ssh-agent or a hardware-backed agent — never leaves it.
 3. It posts the payload and the signature to `/api/cli/commits`.
 
 Stars, pastéis, follows and bookmarks are **not** available here: /dev/null
@@ -102,17 +103,19 @@ no cookie jar, and no scraping of private state:
 - `https://dev-null.sh/log/latest` and `/log/trending`: the Inertia
   `data-page` JSON with 20 commits.
 - `https://dev-null.sh/@user/commits/{id}` with
-  `Cookie: replies_per_page=25`: a commit, its ancestors, and its replies.
+  `Cookie: replies_per_page=25`: a commit and its replies, one page at a time.
 
 `Following` needs your session and is not offered. The timeline refreshes every
 60 seconds; `--interval` changes that.
 
 ## Text mode
 
-For agents and scripts, and for a quick look without a TUI:
+For agents and scripts, and for a quick look without a TUI. Piped output has no
+colour codes and no key hints:
 
 ```sh
-NO_COLOR=1 node index.js --once --log latest --width 100
+node index.js --once --log latest --width 100
+node index.js --once --avatars      # half-block avatars, when piped
 ```
 
 `herdr plugin action invoke devnull.feed.latest` prints the same into the
@@ -139,6 +142,8 @@ There is no build step and no runtime dependency: Herdr launches
 | `lib/devnull.js` | page JSON → commits, threads |
 | `lib/avatars.js` | GitHub `?s=6` PNG → half blocks, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply |
+| `lib/jpeg.js` | the baseline JPEG decoder GitHub's photo avatars need |
+| `lib/pane-id.js` | finds an already-open feed pane for `open.sh` |
 | `lib/text.js` | display width, wrapping, link detection |
 
 ## Licence

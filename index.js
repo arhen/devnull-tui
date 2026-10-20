@@ -3,13 +3,19 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-import { postCommit, signingKey } from "./lib/auth.js";
+import { cleanup, postCommit } from "./lib/auth.js";
 import { avatarRows } from "./lib/avatars.js";
 import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
+import { clean } from "./lib/text.js";
 
 const args = process.argv.slice(2);
-const flag = (/** @type {string} */ name, fallback = null) => {
+
+/**
+ * @param {string} name
+ * @param {string|number|boolean|null} [fallback]
+ */
+const flag = (name, fallback = null) => {
   const index = args.indexOf(`--${name}`);
   if (index === -1) return fallback;
   const value = args[index + 1];
@@ -17,7 +23,8 @@ const flag = (/** @type {string} */ name, fallback = null) => {
 };
 
 const once = args.includes("--once");
-const initialLog = LOGS.includes(String(flag("log"))) ? String(flag("log")) : "latest";
+const wantedLog = String(flag("log", "latest"));
+const initialLog = LOGS.includes(wantedLog) ? wantedLog : "latest";
 const interval = Math.max(15, Number(flag("interval", 60)) || 60);
 
 /** @type {any} */
@@ -31,6 +38,7 @@ const state = {
   selectedIndex: 0,
   selectedId: null,
   blockCount: 0,
+  blocks: [],
   offset: 0,
   composer: null,
   newCount: 0,
@@ -38,60 +46,47 @@ const state = {
   error: null,
   help: false,
   loading: true,
-  avatars: process.stdout.columns > 52,
+  avatars: Boolean(process.stdout.isTTY) && (process.stdout.columns || 0) > 52,
   me: null,
   fetchedAt: 0,
   now: Date.now(),
   width: process.stdout.columns || 100,
   height: process.stdout.rows || 30,
-  refresh: () => draw(),
 };
 
-let flashTimer = /** @type {NodeJS.Timeout|null} */ (null);
+let flashUntil = 0;
+let loadSeq = 0;
+let fetchSeq = 0;
 let refreshing = false;
 
 /** @param {string} text */
 const flash = (text) => {
   state.status = { kind: "ok", text };
-  if (flashTimer) clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => {
-    state.status = null;
-    draw();
-  }, 3000);
+  flashUntil = Date.now() + 3000;
+  draw();
 };
 
 const selectedCommit = () => {
-  if (state.mode === "thread") return threadBlocks().find((entry) => entry.commit.id === state.selectedId)?.commit ?? state.thread?.root ?? null;
+  if (state.mode === "thread") {
+    if (!state.thread?.root) return null;
+    return state.thread.root.id === state.selectedId ? state.thread.root : state.thread.replies.find((/** @type {any} */ reply) => reply.id === state.selectedId) ?? state.thread.root;
+  }
   return state.commits[state.selectedIndex] ?? null;
 };
 
-// The flat, ordered list the thread view draws, so selection maps to a commit.
-const threadBlocks = () => {
-  if (!state.thread?.root) return [];
-  /** @type {any[]} */
-  const flat = [{ commit: state.thread.root, depth: 0 }];
-  /** @param {any[]} replies @param {number} depth */
-  const walk = (replies, depth) => {
-    for (const reply of replies) {
-      flat.push({ commit: reply, depth });
-      const children = state.thread.expanded.get(reply.id);
-      if (Array.isArray(children)) walk(children, depth + 1);
-    }
-  };
-  walk(state.thread.replies, 1);
-  return flat;
-};
-
 async function refresh({ quiet = false } = {}) {
-  if (refreshing) return;
-  refreshing = true;
-  if (!quiet) flash("refreshing…");
-
-  const previousIds = new Set(state.commits.map((/** @type {any} */ commit) => commit.id));
+  if (refreshing && quiet) return;
+  const token = ++fetchSeq;
+  const log = state.log;
   const selected = state.commits[state.selectedIndex];
+  const previousIds = new Set(state.commits.map((/** @type {any} */ commit) => commit.id));
+  if (!quiet) flash("refreshing…");
+  refreshing = true;
 
   try {
-    const result = await fetchLog(state.log);
+    const result = await fetchLog(log);
+    if (token !== fetchSeq || log !== state.log) return;
+
     state.commits = result.commits;
     state.fetchedAt = result.fetchedAt;
     state.loading = false;
@@ -104,26 +99,23 @@ async function refresh({ quiet = false } = {}) {
       previousIds.size > 0 && kept > 0
         ? result.commits.slice(0, kept).filter((/** @type {any} */ commit) => !previousIds.has(commit.id)).length
         : 0;
-    if (state.newCount === 0) state.status = null;
+    if (Date.now() > flashUntil) state.status = null;
   } catch (error) {
-    state.error = String(error instanceof Error ? error.message : error);
-    state.loading = false;
+    if (token === fetchSeq) {
+      state.error = clean(error instanceof Error ? error.message : String(error));
+      state.loading = false;
+    }
   } finally {
     refreshing = false;
-    draw();
+    if (token === fetchSeq) draw();
   }
 }
 
 /** @param {any} commit */
 async function loadThread(commit) {
-  state.thread = {
-    root: commit,
-    ancestors: [],
-    replies: [],
-    expanded: new Map(),
-    more: false,
-    loading: true,
-  };
+  const token = ++loadSeq;
+  state.mode = "thread";
+  state.thread = { root: commit, ancestors: [], replies: [], expanded: new Map(), more: false, loading: true };
   state.selectedId = commit.id;
   state.selectedIndex = 0;
   state.offset = 0;
@@ -132,20 +124,23 @@ async function loadThread(commit) {
 
   try {
     const thread = await fetchThread(commit);
+    if (token !== loadSeq) return;
     state.thread = { ...thread, expanded: new Map(), loading: false };
     state.selectedId = thread.root.id;
     state.selectedIndex = 0;
     state.fetchedAt = thread.fetchedAt;
   } catch (error) {
-    state.thread.loading = false;
-    state.error = String(error instanceof Error ? error.message : error);
+    if (token !== loadSeq) return;
+    if (state.thread) {
+      state.thread.loading = false;
+      state.error = clean(error instanceof Error ? error.message : String(error));
+    }
   }
-  draw();
+  if (token === loadSeq) draw();
 }
 
 /** @param {any} commit */
 const openThread = (commit) => {
-  state.mode = "thread";
   state.threadStack = [];
   state.help = false;
   void loadThread(commit);
@@ -168,6 +163,7 @@ const back = () => {
     return draw();
   }
   if (state.mode !== "thread") return;
+  loadSeq += 1;
   if (state.threadStack.length) {
     state.thread = state.threadStack.pop();
     state.selectedId = state.thread.root.id;
@@ -183,23 +179,31 @@ const back = () => {
 
 const expand = async () => {
   const commit = selectedCommit();
-  if (!commit || !state.thread || !commit.replies) {
-    flash("no replies to expand");
+  const thread = state.thread;
+  if (!thread || !commit || !commit.replies) {
+    flash("nothing to expand");
     return;
   }
-  const cached = state.thread.expanded.get(commit.id);
+  if (commit.id === thread.root.id) {
+    flash("the conversation is already open");
+    return;
+  }
+
+  const cached = thread.expanded.get(commit.id);
   if (Array.isArray(cached)) {
-    state.thread.expanded.delete(commit.id);
+    thread.expanded.delete(commit.id);
     return draw();
   }
 
   flash(`loading ${commit.replies} ${commit.replies === 1 ? "reply" : "replies"}…`);
   try {
-    const thread = await fetchThread(commit);
-    state.thread.expanded.set(commit.id, thread.replies);
-    state.status = null;
+    const loaded = await fetchThread(commit);
+    if (state.thread !== thread || state.mode !== "thread") return;
+    thread.expanded.set(commit.id, loaded.replies);
+    if (Date.now() > flashUntil) state.status = null;
   } catch (error) {
-    state.error = String(error instanceof Error ? error.message : error);
+    if (state.thread !== thread) return;
+    state.error = clean(error instanceof Error ? error.message : String(error));
   }
   draw();
 };
@@ -212,6 +216,7 @@ const draw = () => {
   state.selectedIndex = result.selectedIndex;
   state.blockCount = result.blockCount;
   state.selectedId = result.selectedId;
+  state.blocks = result.blocks;
   if (state.mode === "timeline") state.timelineIndex = result.selectedIndex;
   process.stdout.write(`\x1b[H${result.lines.map((line) => `${line}\x1b[K`).join("\r\n")}\x1b[J`);
 };
@@ -223,15 +228,28 @@ const spawnDetached = (/** @type {string} */ command, /** @type {string[]} */ co
     child.on("exit", (code) => resolve(code === 0));
   });
 
+const guiCandidates = () =>
+  [
+    process.env.HERDR_GPUI_PATH,
+    "/Applications/Herdr.app/Contents/MacOS/Herdr",
+    "herdr-gpui",
+  ].filter(Boolean);
+
+async function openInBrowserTab(/** @type {string} */ url) {
+  for (const candidate of guiCandidates()) {
+    if (candidate.includes("/") && !existsSync(candidate)) continue;
+    if (await spawnDetached(String(candidate), ["browser", "open", url])) return true;
+  }
+  const fallback = process.platform === "darwin" ? "open" : "xdg-open";
+  return spawnDetached(fallback, [url]);
+}
+
 async function openSelected() {
   const commit = selectedCommit();
   if (!commit) return;
-
-  const herdr = process.env.HERDR_BIN_PATH ?? "/Applications/Herdr.app/Contents/MacOS/Herdr";
-  const fallback = process.platform === "darwin" ? "open" : "xdg-open";
-  const inBrowserTab = existsSync(herdr) && (await spawnDetached(herdr, ["browser", "open", commit.permalink]));
-  if (!inBrowserTab) void spawnDetached(fallback, [commit.permalink]);
-  flash(`opened @${commit.author.username}`);
+  flash(`opening @${clean(commit.author.username)}…`);
+  const opened = await openInBrowserTab(commit.permalink);
+  flash(opened ? `opened @${clean(commit.author.username)}` : commit.permalink);
 }
 
 const startComposer = (/** @type {any} */ replyTo) => {
@@ -242,7 +260,7 @@ const startComposer = (/** @type {any} */ replyTo) => {
 
 async function submit() {
   const composer = state.composer;
-  if (!composer) return;
+  if (!composer || composer.busy) return;
   const body = composer.value.trim();
   if (!body) {
     composer.error = "nothing to send";
@@ -254,52 +272,70 @@ async function submit() {
   draw();
 
   try {
-    const answer = await postCommit({ body, replyTo: composer.replyTo?.id ?? null });
+    const answer = await postCommit({ body, replyTo: composer.replyTo?.permalink ?? null });
     const handle = /@([\w.-]+)\/commits/.exec(answer);
     if (handle) state.me = handle[1];
-    state.composer = null;
+    if (state.composer === composer) state.composer = null;
     flash(composer.replyTo ? "replied ✓" : "committed ✓");
     if (state.mode === "thread" && state.thread?.root) await loadThread(state.thread.root);
     else await refresh({ quiet: true });
   } catch (error) {
+    if (state.composer !== composer) return;
     composer.busy = null;
-    composer.error = String(error instanceof Error ? error.message : error);
+    composer.error = clean(error instanceof Error ? error.message : String(error));
     draw();
   }
 }
 
-const moveSelection = (/** @type {number} */ delta) => {
-  const count = state.blockCount || (state.mode === "thread" ? threadBlocks().length : state.commits.length);
+const moveSelection = (/** @type {number} */ delta, /** @type {number} */ max) => {
+  const count = max || state.blockCount;
   if (!count) return;
   state.selectedIndex = Math.max(0, Math.min(count - 1, state.selectedIndex + delta));
   state.selectedId = null;
 };
 
-const typeInComposer = (/** @type {string} */ key, /** @type {string} */ chunk) => {
+const scrollHalfPage = (/** @type {number} */ direction) => {
+  const half = Math.max(1, Math.floor((state.height - 3) / 2));
+  const target = state.offset + direction * half;
+  let index = 0;
+  for (const block of state.blocks) if (block.start <= target) index = block.index;
+  state.selectedIndex = Math.max(0, Math.min(state.blockCount - 1, index));
+  state.selectedId = null;
+};
+
+const typeInComposer = (/** @type {string} */ key, /** @type {string} */ text, /** @type {boolean} */ pasted) => {
   const composer = state.composer;
   if (!composer || composer.busy) return;
 
-  if (key === "\r") return void submit();
-  if (key === "\u007f" || key === "\b") {
+  if (pasted) {
+    composer.value += clean(text);
+  } else if (key === "\r") {
+    void submit();
+    return;
+  } else if (key === "\u007f" || key === "\b") {
     composer.value = [...composer.value].slice(0, -1).join("");
   } else if (key === "\u0015") {
     composer.value = "";
   } else if (key === "\u0017") {
     composer.value = composer.value.replace(/\s*\S*$/, "");
-  } else if (chunk.length === 1 && chunk >= " " && chunk !== "\u007f") {
-    composer.value += chunk;
+  } else if (text >= " " && text !== "\u007f") {
+    composer.value += text;
   }
   draw();
 };
 
-/** @param {string} key @param {string} chunk */
-function onKey(key, chunk) {
+/** @param {string} key @param {string} text */
+function onKey(key, text) {
   if (state.composer) {
+    if (key === "\u0003") {
+      state.composer = null;
+      return draw();
+    }
     if (key === "\u001b") {
       state.composer = null;
       return draw();
     }
-    return typeInComposer(key, chunk);
+    return typeInComposer(key, text, false);
   }
 
   if (key === "\u0003") return quit();
@@ -310,29 +346,33 @@ function onKey(key, chunk) {
       return quit();
     case "j":
     case "\u001b[B":
-      moveSelection(1);
+    case "\u001bOB":
+      moveSelection(1, 0);
       break;
     case "k":
     case "\u001b[A":
-      moveSelection(-1);
+    case "\u001bOA":
+      moveSelection(-1, 0);
       break;
     case "g":
     case "\u001b[H":
+    case "\u001bOH":
       state.selectedIndex = 0;
       state.selectedId = null;
       break;
     case "G":
     case "\u001b[F":
+    case "\u001bOF":
       state.selectedIndex = Math.max(0, state.blockCount - 1);
       state.selectedId = null;
       break;
     case "\u0004":
     case "\u001b[6~":
-      moveSelection(5);
+      scrollHalfPage(1);
       break;
     case "\u0015":
     case "\u001b[5~":
-      moveSelection(-5);
+      scrollHalfPage(-1);
       break;
     case "\r":
       if (state.mode === "thread") {
@@ -391,8 +431,11 @@ const switchLog = (/** @type {string} */ log) => {
   void refresh();
 };
 
+const restore = () => process.stdout.write("\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h");
+
 const quit = () => {
-  process.stdout.write("\x1b[?1049l\x1b[?25h");
+  cleanup();
+  restore();
   process.exit(0);
 };
 
@@ -401,22 +444,59 @@ function startKeys() {
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.setEncoding("utf8");
+  process.stdout.write("\x1b[?2004h\x1b[?7l");
+
+  let buffer = "";
+  /** @type {NodeJS.Timeout|null} */
+  let escapeTimer = null;
+
+  const flushEscape = () => {
+    if (buffer === "\u001b") {
+      buffer = "";
+      onKey("\u001b", "\u001b");
+    }
+  };
+
   process.stdin.on("data", (chunk) => {
-    const text = String(chunk);
-    let index = 0;
-    while (index < text.length) {
-      if (text[index] === "\u001b" && text[index + 1] === "[") {
-        const match = /^\u001b\[[0-9;]*[A-Za-z~]/.exec(text.slice(index));
-        if (match) {
-          onKey(match[0], match[0]);
-          index += match[0].length;
+    buffer += String(chunk);
+
+    while (buffer.length) {
+      if (escapeTimer) {
+        clearTimeout(escapeTimer);
+        escapeTimer = null;
+      }
+
+      if (buffer.startsWith("\u001b[200~")) {
+        const end = buffer.indexOf("\u001b[201~");
+        if (end === -1) return;
+        const pasted = buffer.slice(6, end);
+        buffer = buffer.slice(end + 6);
+        if (state.composer) typeInComposer("", pasted, true);
+        continue;
+      }
+
+      if (buffer[0] === "\u001b") {
+        const csi = /^\u001b[[O][0-9;]*[A-Za-z~]/.exec(buffer) ?? /^\u001bO[A-Za-z]/.exec(buffer);
+        if (csi) {
+          buffer = buffer.slice(csi[0].length);
+          onKey(csi[0], csi[0]);
           continue;
         }
+        if (buffer.length === 1) {
+          escapeTimer = setTimeout(flushEscape, 30);
+          return;
+        }
+        buffer = buffer.slice(1);
+        onKey("\u001b", "\u001b");
+        continue;
       }
-      onKey(text[index], text[index]);
-      index += 1;
+
+      const char = String.fromCodePoint(/** @type {number} */ (buffer.codePointAt(0)));
+      buffer = buffer.slice(char.length);
+      onKey(char, char);
     }
   });
+
   process.stdin.on("end", quit);
 }
 
@@ -429,8 +509,9 @@ async function main() {
       process.stderr.write(`${state.error}\n`);
       process.exit(1);
     }
-    state.width = Number(flag("width", process.stdout.columns || 100));
-    state.avatars = args.includes("--avatars") || state.width > 52;
+    const width = Number(flag("width", process.stdout.columns || 100));
+    state.width = Number.isFinite(width) && width > 20 ? width : 100;
+    state.avatars = args.includes("--avatars") || (Boolean(process.stdout.isTTY) && state.width > 52);
     if (state.avatars) {
       for (const commit of state.commits) avatarRows(commit.author);
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -440,32 +521,41 @@ async function main() {
   }
 
   process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J");
-  process.on("exit", () => process.stdout.write("\x1b[?1049l\x1b[?25h"));
+  process.on("exit", restore);
   process.stdout.on("resize", () => {
     state.width = process.stdout.columns || state.width;
     state.height = process.stdout.rows || state.height;
-    state.avatars = state.width > 52;
+    state.avatars = Boolean(process.stdout.isTTY) && state.width > 52;
     draw();
   });
 
   startKeys();
   draw();
-  void refresh({ quiet: true }).then(() => {
-    void signingKey().catch(() => {
-      // Committing is optional: the feed stays readable without a key.
-    });
-  });
+  void refresh({ quiet: true });
 
   setInterval(() => {
     state.now = Date.now();
     draw();
   }, 1000);
   setInterval(() => {
-    if (state.mode === "timeline" && !state.help) void refresh({ quiet: true });
+    if (state.mode === "timeline" && !state.help && !state.composer) void refresh({ quiet: true });
   }, interval * 1000);
 }
 
-process.on("SIGTERM", quit);
-process.on("SIGINT", quit);
+for (const signal of /** @type {const} */ (["SIGTERM", "SIGINT", "SIGHUP"])) {
+  process.on(signal, quit);
+}
+
+process.on("unhandledRejection", (reason) => fail(reason));
+process.on("uncaughtException", (error) => fail(error));
+
+/** @param {unknown} reason */
+function fail(reason) {
+  cleanup();
+  restore();
+  const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  process.stderr.write(`devnull.feed: ${message}\n`);
+  process.exit(1);
+}
 
 void main();
