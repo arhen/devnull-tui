@@ -18,11 +18,9 @@ with your SSH key.
 ○
 ```
 
-Avatars have three modes, cycled with `a`: the circle sampled from the author's
-GitHub picture (default, two columns, no picture drawn), the picture itself as
-a 6×6 half-block image, or nothing. The photo mode is charming up close and
-costs about three times the terminal output per frame, so the circle is what
-keeps the pane snappy; start with `--photos` to open it in photo mode.
+Each author gets a dot in the lane colour, tinted by a colour sampled from
+their real GitHub photo, so the rail still reads as a person and costs two
+columns. `a` turns the dots off and back on.
 
 ## Requirements
 
@@ -90,7 +88,7 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `R` | reply to the selected commit |
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
-| `a` | avatars: colour circle → real photo → none |
+| `a` | avatars: colour dots on / off |
 | `s` | star or unstar the selected commit (needs a device once) |
 | `d` | delete one of your own commits, twice to confirm |
 | `r` | refresh |
@@ -155,7 +153,7 @@ colour codes and no key hints:
 
 ```sh
 node index.js --once --log latest --width 100
-node index.js --once --photos        # half-block avatars, when piped
+node index.js --once                 # one text frame, when piped
 ```
 
 `herdr plugin action invoke devnull.feed.latest` prints the same into the
@@ -180,7 +178,7 @@ There is no build step and no runtime dependency: Herdr launches
 | `index.js` | state machine: timeline, thread, composer, keys, polling |
 | `lib/draw.js` | rows, rails, avatars, links, thread and chrome |
 | `lib/devnull.js` | page JSON → commits, threads |
-| `lib/avatars.js` | GitHub `?s=6` PNG or JPEG → half blocks, cached in `HERDR_PLUGIN_STATE_DIR` |
+| `lib/avatars.js` | GitHub avatar photo → one colour sample for the dot, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply |
 | `lib/jpeg.js` | the baseline JPEG decoder GitHub's photo avatars need |
 | `lib/pane-id.js` | finds an already-open feed pane for `open.sh` |

@@ -5,7 +5,6 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
 import * as device from "./lib/device.js";
-import { avatar } from "./lib/avatars.js";
 import { LOGS, fetchLog, fetchThread } from "./lib/devnull.js";
 import { renderOnce, renderScreen } from "./lib/draw.js";
 import { clean, graphemes, sanitize } from "./lib/text.js";
@@ -48,8 +47,7 @@ const state = {
   error: null,
   help: false,
   loading: true,
-  avatarMode: /** @type {"circle"|"photo"|"none"} */ (args.includes("--no-photos") ? "circle" : "photo"),
-  kitty: false,
+  avatarMode: /** @type {"circle"|"none"} */ "circle",
   me: null,
   fetchedAt: 0,
   now: Date.now(),
@@ -219,24 +217,6 @@ const expand = async () => {
 };
 
 let painted = /** @type {string[]} */ ([]);
-const transmitted = new Set();
-const placed = new Set();
-
-/** @param {number} id @param {string} data */
-/** @param {number} id @param {string} data */
-const kittyTransmit = (id, data) => {
-  const chunks = [];
-  for (let at = 0; at < data.length; at += 4096) chunks.push(data.slice(at, at + 4096));
-  return chunks
-    .map((chunk, index) => `\x1b_Ga=t,f=100,i=${id},q=2${index < chunks.length - 1 ? ",m=1" : ""};${chunk}\x1b\\`)
-    .join("");
-};
-
-/** @param {number} id */
-const kittyDelete = (id) => `\x1b_Ga=d,d=i,i=${id},q=2\x1b\\`;
-
-/** @param {number} row @param {number} id */
-const kittyPlace = (row, id) => `\x1b[${row};1H\x1b_Ga=p,i=${id},c=2,r=1,q=2\x1b\\`;
 
 const draw = () => {
   if (once) return;
@@ -252,79 +232,18 @@ const draw = () => {
   // Rewrite only the rows that changed: moving the selection repaints two or
   // three rows instead of the whole pane, which is what keeps it instant.
   const lines = result.lines;
-  /** @type {Set<number>} */
-  const changed = new Set();
+  const height = lines.length;
+  /** @type {string} */
   let frame = "";
-
-  if (lines.length === painted.length) {
-    for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index] !== painted[index]) {
-        frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
-        changed.add(index + 1);
-      }
+  if (height === painted.length) {
+    for (let index = 0; index < height; index += 1) {
+      if (lines[index] !== painted[index]) frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
     }
   } else {
     frame = `\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`;
-    for (let index = 0; index < lines.length; index += 1) changed.add(index + 1);
   }
-
-  // Avatars as real images: transmit once, then put them back on any row that
-  // was just erased (Kitty graphics does not survive a line clear).
-  let graphics = "";
-  const wanted = state.avatarMode === "photo" && state.kitty ? result.graphics : [];
-  const keep = new Set(wanted.map((graphic) => graphic.id));
-
-  for (const id of placed) {
-    if (!keep.has(id)) {
-      graphics += kittyDelete(id);
-      placed.delete(id);
-    }
-  }
-
-  for (const graphic of wanted) {
-    if (!changed.has(graphic.row)) continue;
-    if (!transmitted.has(graphic.id)) {
-      graphics += kittyTransmit(graphic.id, graphic.data);
-      transmitted.add(graphic.id);
-    }
-    graphics += kittyDelete(graphic.id) + kittyPlace(graphic.row, graphic.id);
-    placed.add(graphic.id);
-  }
-
-  if (process.env.DEVNULL_DEBUG) {
-    appendFileSync(
-      "/tmp/devnull-debug.log",
-      `draw mode=${state.avatarMode} kitty=${state.kitty} graphics=${result.graphics.length} changed=${changed.size}\n`,
-    );
-  }
-  if (frame || graphics) process.stdout.write(frame + graphics);
+  if (frame) process.stdout.write(frame);
   painted = lines;
-};
-
-/** Asks the terminal whether it speaks the Kitty graphics protocol. */
-const detectKitty = async () => {
-  if (!process.stdin.isTTY) return { kitty: false, stash: "" };
-  let stash = "";
-  return new Promise((resolve) => {
-    let done = false;
-    /** @param {boolean} kitty */
-    const finish = (kitty) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      process.stdin.off("data", onData);
-      resolve({ kitty, stash });
-    };
-    /** @param {Buffer|string} chunk */
-    const onData = (chunk) => {
-      const text = String(chunk);
-      if (text.includes("\u001b_G")) return finish(true);
-      stash += text;
-    };
-    const timer = setTimeout(() => finish(false), 300);
-    process.stdin.on("data", onData);
-    process.stdout.write("\u001b_Gi=1,a=q;AAAA\u001b\\");
-  });
 };
 
 state.refresh = draw;
@@ -614,15 +533,8 @@ function onKey(key, text) {
     case "2":
       return switchLog("trending");
     case "a":
-      state.avatarMode =
-        state.avatarMode === "circle"
-          ? state.kitty
-            ? "photo"
-            : "none"
-          : state.avatarMode === "photo"
-            ? "none"
-            : "circle";
-      flash(`avatars: ${state.avatarMode}`);
+      state.avatarMode = state.avatarMode === "circle" ? "none" : "circle";
+      flash(`avatars: ${state.avatarMode === "circle" ? "colour dots" : "off"}`);
       painted = [];
       break;
     case "?":
@@ -657,7 +569,7 @@ const switchLog = (/** @type {string} */ log) => {
 
 const restore = () => {
   if (once) return;
-  process.stdout.write("\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h");
+  process.stdout.write("\x1b[?2004l\x1b[?7h\x1b[?1049l\x1b[?25h\x1b_Ga=d,d=A,q=2\x1b\\");
 };
 
 const quit = () => {
@@ -762,11 +674,6 @@ async function main() {
     }
     const width = Number(flag("width", process.stdout.columns || 100));
     state.width = Number.isFinite(width) && width > 20 ? width : 100;
-    state.avatarMode = args.includes("--photos") || args.includes("--avatars") ? "photo" : "circle";
-    if (state.avatarMode === "photo") {
-      for (const commit of state.commits) avatar(commit.author);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
     process.stdout.write(`${renderOnce(state).join("\n")}\n`);
     return;
   }
@@ -782,13 +689,6 @@ async function main() {
     process.stdout.write("\x1b[?2004h\x1b[?7l");
   }
 
-  const probe = await detectKitty();
-  state.kitty = probe.kitty;
-  if (process.env.DEVNULL_DEBUG) {
-    appendFileSync("/tmp/devnull-debug.log", `probe kitty=${probe.kitty} stash=${probe.stash.length}\n`);
-  }
-  if (state.avatarMode === "photo" && !state.kitty) state.avatarMode = "circle";
-
   process.stdout.on("resize", () => {
     state.width = process.stdout.columns || state.width;
     state.height = process.stdout.rows || state.height;
@@ -797,7 +697,7 @@ async function main() {
     draw();
   });
 
-  startKeys(probe.stash);
+  startKeys();
   draw();
   void refresh({ quiet: true });
 
