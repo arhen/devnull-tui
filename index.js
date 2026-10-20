@@ -5,7 +5,7 @@ import { appendFileSync, existsSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
 import { MAX_IMAGES, droppedPaths, extractImages, readAttachment } from "./lib/attachments.js";
-import { fetchFollowing, fetchNotificationGroup, fetchNotifications } from "./lib/api.js";
+import { fetchFollowing, fetchNotificationGroup, fetchNotifications, fetchUnread } from "./lib/api.js";
 import * as device from "./lib/device.js";
 import { fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
 import { TABS, renderOnce, renderScreen } from "./lib/draw.js";
@@ -43,6 +43,7 @@ const state = {
     expanded: /** @type {Map<string, any[]>} */ (new Map()),
   },
   gate: null,
+  unread: 0,
   thread: null,
   threadStack: [],
   timelineIndex: 0,
@@ -91,6 +92,19 @@ const selectedNotification = () =>
   state.tab === "notifications" && state.mode !== "thread"
     ? state.notifications.items[state.selectedIndex]?.notification ?? null
     : null;
+
+/** One signed request for the badge: it marks nothing read, unlike listing the inbox. */
+async function refreshUnread() {
+  if (!device.hasDevice()) return;
+  try {
+    const count = await fetchUnread();
+    if (state.unread === count) return;
+    state.unread = count;
+    draw();
+  } catch {
+    // The badge is a nicety; a failed poll must not put an error on screen.
+  }
+}
 
 /** The commit the keys act on: the inbox's commit, or the log's selection. */
 const selectedSubject = () => selectedNotification()?.commit ?? selectedCommit();
@@ -151,6 +165,8 @@ async function refresh({ quiet = false } = {}) {
       state.fetchedAt = result.fetchedAt;
       state.loading = false;
       state.error = null;
+      // Listing marks everything read, so there is nothing unread left.
+      state.unread = 0;
       if (Date.now() > flashUntil) state.status = null;
       return;
     }
@@ -180,6 +196,7 @@ async function refresh({ quiet = false } = {}) {
         ? result.commits.slice(0, kept).filter((/** @type {any} */ commit) => !previousIds.has(commit.id)).length
         : 0;
     if (Date.now() > flashUntil) state.status = null;
+    void refreshUnread();
   } catch (error) {
     if (token === fetchSeq) {
       const message = clean(error instanceof Error ? error.message : String(error));
