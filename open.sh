@@ -24,9 +24,15 @@ if [ -n "$panes" ]; then
   fi
 fi
 
+# Callers differ: a pane has HERDR_PANE_ID, a plugin action carries it in its context.
+pane="${HERDR_PANE_ID:-}"
+if [ -z "$pane" ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  pane="$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | sed -n 's/.*"focused_pane_id":"\([^"]*\)".*/\1/p')"
+fi
+
 set -- open --plugin devnull.feed --entrypoint feed --direction right --focus
-if [ -n "${HERDR_PANE_ID:-}" ]; then
-  set -- "$@" --target-pane "$HERDR_PANE_ID"
+if [ -n "$pane" ]; then
+  set -- "$@" --target-pane "$pane"
 fi
 
 exec "$herdr" plugin pane "$@"

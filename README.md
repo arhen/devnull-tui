@@ -42,11 +42,21 @@ herdr plugin link ~/Code/personal/herdr-devnull-plugin
 
 ## Open it
 
+From a pane, beside that pane:
+
+```sh
+herdr plugin pane open --plugin devnull.feed --entrypoint feed \
+  --direction right --target-pane "$HERDR_PANE_ID" --focus
+```
+
+From the command palette or a keybinding, the action opens or focuses a feed in
+the workspace the user is looking at:
+
 ```sh
 herdr plugin action invoke devnull.feed.open
 ```
 
-Or bind a key in `~/.config/herdr/config.toml`:
+Bind a key in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
