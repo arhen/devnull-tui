@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 import { cleanup, postCommit } from "./lib/auth.js";
 import { MAX_IMAGES, droppedPaths, extractImages, readAttachment } from "./lib/attachments.js";
@@ -25,7 +25,47 @@ const flag = (name, fallback = null) => {
   return value && !value.startsWith("--") ? value : true;
 };
 
-const once = args.includes("--once");
+const usage = `devnull — the /dev/null commit log, in a terminal
+
+Usage
+  devnull [options]
+
+Options
+  --once             print the log and exit
+  --log <name>       latest (default), trending, following, notifications
+  --interval <sec>   refresh interval, at least 15 (default 60)
+  --width <cols>     width for --once (default: the terminal's)
+  --help, -h         this text
+  --version, -v      the version
+
+Keys
+  ?                  the whole list, inside the pane
+
+Environment
+  NO_COLOR                no colour, avatars or images
+  HERDR_PLUGIN_STATE_DIR  cache directory (default ~/.cache/herdr-devnull)
+
+Outside a terminal it prints once, so \`devnull | less\` works. In a Herdr
+pane the same program is the devnull.feed plugin.
+`;
+
+if (args.includes("--help") || args.includes("-h")) {
+  process.stdout.write(usage);
+  process.exit(0);
+}
+
+if (args.includes("--version") || args.includes("-v")) {
+  try {
+    const meta = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    process.stdout.write(`${meta.version}\n`);
+  } catch {
+    process.stdout.write("0.0.0\n");
+  }
+  process.exit(0);
+}
+
+// A pipe is a reader, not a keyboard: print the log and exit.
+const once = args.includes("--once") || !process.stdout.isTTY || !process.stdin.isTTY;
 const wantedTab = String(flag("log", "latest"));
 const initialTab = TABS.includes(wantedTab) ? wantedTab : "latest";
 const interval = Math.max(15, Number(flag("interval", 60)) || 60);

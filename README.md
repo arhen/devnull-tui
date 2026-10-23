@@ -91,6 +91,43 @@ description = "open the /dev/null feed"
 The pane opens as a split beside the calling pane. Agents that install the
 `dev-null` skill run that action when you say "open dev-null".
 
+## Standalone CLI
+
+The same program runs without Herdr, in any terminal.
+
+Install it with no package manager and no build step:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/arhen/herdr-devnull-plugin/main/install.sh | sh
+```
+
+The script needs `curl` and Node 20+, puts the files in `~/.local/share/devnull`
+and points `~/.local/bin/devnull` at them (`DEVNULL_HOME`, `DEVNULL_PREFIX` and
+`DEVNULL_REF` override that, and `DEVNULL_REPO` covers the repository moving).
+Run from a checkout, `sh install.sh` installs that checkout instead. To remove
+it, delete both paths.
+
+From a checkout, without installing anything:
+
+```sh
+node index.js            # the feed, interactive
+```
+
+| Flag | |
+| --- | --- |
+| `--once` | print the log and exit |
+| `--log <name>` | `latest` (default), `trending`, `following`, `notifications` |
+| `--interval <sec>` | refresh interval, at least 15 (default 60) |
+| `--width <cols>` | width for `--once` (default: the terminal's) |
+| `--help` / `-h` | usage |
+| `--version` / `-v` | the version |
+
+Everything works without Herdr: reading, following, the inbox, stars, deletes,
+committing and replying with your SSH key, device approval, dropping images
+into a draft. The only difference is `o`: a Herdr browser tab when Herdr is
+there, the default browser when it is not. A pipe is treated as a reader —
+`devnull | less` and `devnull > feed.txt` print once and exit.
+
 ## Keys
 
 | Key | |
