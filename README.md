@@ -189,12 +189,11 @@ notifications marks them read on /dev/null, as it does on the web.
 - `@` tags people. The names on screen come first, then /dev/null's own people
   search; `↑`/`↓` (or `ctrl+p`/`ctrl+n`) pick one, `tab` or `enter` puts the
   `@handle` in, `esc` closes the list.
-- Drop an image on the pane, or paste its path. Herdr pastes a dropped file as
-  its path, so a drop, a Finder drag, or a typed `--image`-style path all
-  attach the same way: JPEG, PNG or WebP up to 10 MB, at most 3 a commit, told
-  apart by their bytes rather than their extension. Videos, GIFs, SVG and
-  HEIC are refused with the reason, as /dev/null would refuse them. On an empty
-  draft, backspace removes the last image.
+- Drop an image into the composer, or paste its path. Herdr pastes a dropped
+  file as its path, so a drop, a Finder drag, or a typed `--image`-style path
+  all attach the same way: JPEG, PNG or WebP up to 10 MB, at most 3 a commit;
+  videos, GIFs, SVG and HEIC are refused with the reason, as /dev/null would
+  refuse them. On an empty draft, backspace removes the last image.
 - `enter` sends, `shift+enter` starts a new line, `esc` cancels, `ctrl+u`
   clears the draft.
 - The composer is two lines tall. `←`/`→` move the caret, `ctrl+←`/`ctrl+→`
@@ -207,19 +206,20 @@ notifications marks them read on /dev/null, as it does on the web.
 
 Stars, pastéis, follows, bookmarks and deletes are not part of the commit
 signature API: /dev/null only accepts them from a device key it has approved.
-Press `s` once and the plugin takes you through that approval, the same PKCE
+Press `s` once and the UI walks you through that approval, the same PKCE
 flow the mobile app uses:
 
-1. It makes an Ed25519 key under `HERDR_PLUGIN_STATE_DIR` and opens
+1. It makes an Ed25519 key in its state directory (`HERDR_PLUGIN_STATE_DIR`
+   inside Herdr, `~/.cache/devnull-tui` otherwise) and opens
    `/mobile/authorize` in your browser.
 2. You approve it there. The page answers on `devnull://device?code=…`, which a
    desktop has no handler for, so for the few minutes the approval takes the
    pane registers one: an AppleScript applet in `~/Applications` on macOS (made
    with `osacompile`, so no compiler or binary is needed), an
    `x-scheme-handler/devnull` entry in `~/.local/share/applications` on Linux. It
-   writes the code where the pane can read it, and both are removed as soon as
+   writes the code where the app can read it, and both are removed as soon as
    the approval is done.
-3. When no handler can be installed, the pane asks for the code instead: `esc`
+3. When no handler can be installed, it asks for the code instead: `esc`
    switches to pasting it, and a code stays good for five minutes.
 
 From then on `s` stars and unstars, `d` deletes your own commits (twice to
@@ -245,12 +245,12 @@ and sent with `X-Devnull-Timestamp`, `X-Devnull-Nonce` and `X-SSH-Signature`.
 
 Stars, pastéis, follows and bookmarks are **not** available here: /dev/null
 only accepts them from an approved device (a key you approve under
-`/settings/devices` from the mobile app), and this plugin does not pretend
+`/settings/devices` from the mobile app), and this UI does not pretend
 otherwise.
 
 ## Data
 
-The plugin reads what the website renders for guests, so there is no API key,
+It reads what the website renders for guests, so there is no API key,
 no cookie jar, and no scraping of private state:
 
 - `https://dev-null.sh/log/latest` and `/log/trending`: the Inertia
@@ -259,7 +259,7 @@ no cookie jar, and no scraping of private state:
   `Cookie: replies_per_page=25`: a commit and its replies, one page at a time.
 
 Following and the inbox are the user's own, so they come from the signed API
-the mobile app uses, with the device key the pane already has:
+the mobile app uses, with the device key the app already has:
 
 - `/api/v1/log/following`: the commits of the people you follow, plus
   `/dev/null`'s suggestions while the log is empty.
@@ -280,13 +280,14 @@ For agents and scripts, and for a quick look without a TUI. Piped output has no
 colour codes and no key hints:
 
 ```sh
-node index.js --once --log latest --width 100
-node index.js --once --log notifications   # the inbox, as text
-node index.js --once                 # one text frame, when piped
+devnull --once --log latest --width 100
+devnull --once --log notifications   # the inbox, as text
+devnull --once                       # one text frame, when piped
 ```
 
-`herdr plugin action invoke devnull.feed.latest` prints the same into the
-plugin log (`herdr plugin log list --plugin devnull.feed`); `following` and
+From a checkout, `node index.js` takes the same flags. The Herdr actions call
+the same mode: `herdr plugin action invoke devnull.feed.latest` prints it into
+the plugin log (`herdr plugin log list --plugin devnull.feed`); `following` and
 `notifications` are actions too.
 
 ## Development
@@ -294,17 +295,20 @@ plugin log (`herdr plugin log list --plugin devnull.feed`); `following` and
 ```sh
 npm install          # typescript and @types/node, for checking only
 npm run typecheck    # tsc --noEmit over the JSDoc-checked sources
-node index.js        # run the pane by hand
+node index.js        # run it by hand
 ```
 
-There is no build step and no runtime dependency: Herdr launches
-`/bin/sh run.sh` (manifest `[[panes]]`), which execs `node index.js`.
+There is no build step and no runtime dependency. `devnull` is `node index.js`
+with a shebang; inside Herdr, the manifest launches `/bin/sh run.sh`, which
+execs the same file.
 
 ## Layout
 
 | Path | |
 | --- | --- |
 | `herdr-plugin.toml` | pane, actions, keybinding target |
+| `install.sh` | the curl installer: files under `~/.local/share/devnull`, a link in `~/.local/bin` |
+| `run.sh`, `open.sh`, `find-node.sh` | the Herdr entry points |
 | `index.js` | state machine: timeline, thread, composer, keys, polling |
 | `lib/draw.js` | rows, rails, avatars, links, thread, inbox, composer and chrome |
 | `lib/devnull.js` | page JSON → commits, threads |

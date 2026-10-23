@@ -1,8 +1,8 @@
 id = "devnull.feed"
-name = "/dev/null feed"
-version = "0.2.0"
+name = "devnull-tui"
+version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "The /dev/null commit log as a timeline, in a Herdr pane"
+description = "Unofficial terminal UI for /dev/null, in a Herdr pane"
 platforms = ["linux", "macos"]
 
 [[panes]]
