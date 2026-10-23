@@ -30,9 +30,10 @@ columns. `a` turns the dots off and back on.
 
 A commit's attached images stay a one-line `▣ 2 images` marker until you ask
 for them: `i` draws the pictures under the commit and `i` again puts them away,
-so the log is text unless you want to look. They are drawn as half blocks (two
-pixels to a cell), which needs no graphics protocol and survives every redraw,
-scroll and terminal.
+so the log is text unless you want to look. Where the terminal speaks the Kitty
+graphics protocol — Ghostty, Kitty, WezTerm, and Herdr forwards it from a pane —
+the real picture is drawn; everywhere else it falls back to half blocks, which
+need no protocol and survive any redraw.
 
 ## Screenshots
 

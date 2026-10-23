@@ -10,6 +10,7 @@ import { fetchFollowing, fetchNotificationGroup, fetchNotifications, fetchUnread
 import * as device from "./lib/device.js";
 import { fetchLog, fetchThread, searchUsers } from "./lib/devnull.js";
 import { TABS, renderOnce, renderScreen } from "./lib/draw.js";
+import { placementOutput, resetImages } from "./lib/pictures.js";
 import { clean, graphemes, sanitize } from "./lib/text.js";
 
 const args = process.argv.slice(2);
@@ -393,6 +394,8 @@ const expand = async () => {
 };
 
 let painted = /** @type {string[]} */ ([]);
+/** @type {Map<number, string>} */
+let placedImages = new Map();
 
 const draw = () => {
   if (once) return;
@@ -416,9 +419,16 @@ const draw = () => {
       if (lines[index] !== painted[index]) frame += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
     }
   } else {
-    frame = `\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`;
+    // A whole new screen: the images go with it, then the text, then the ones
+    // that are still on it.
+    placedImages = new Map();
+    frame = `${resetImages()}\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`;
   }
+
+  const pictures = placementOutput(result.placements ?? [], placedImages);
+  placedImages = pictures.placed;
   if (frame) process.stdout.write(frame);
+  if (pictures.output) process.stdout.write(pictures.output);
   painted = lines;
 };
 
