@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The /dev/null commit log as a timeline, in a Herdr pane",
+  "description": "The /dev/null commit log as a timeline, in a Herdr pane or a plain terminal",
   "engines": {
     "node": ">=20"
   },
