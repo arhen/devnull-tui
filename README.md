@@ -1,6 +1,10 @@
-# herdr-devnull-plugin
+# devnull-tui
 
-The [/dev/null](https://dev-null.sh) commit log, as a timeline in a Herdr pane.
+An unofficial terminal UI for [/dev/null](https://dev-null.sh), the developers'
+commit social network — in any terminal, or as a Herdr pane.
+
+Unofficial: not affiliated with /dev/null. It reads the same pages the website
+serves its guests.
 
 Every post on /dev/null is a git commit drawn on a rail, coloured by its
 author's lane: a small circle before the name, coloured from the author's real
@@ -42,8 +46,8 @@ A commit opened with its replies, and the hint bar for the keys that work there:
 
 ## Requirements
 
-- Herdr 0.9.0 or newer (`herdr plugin` with pane entrypoints).
 - Node.js 20 or newer (`fetch`, `Intl.Segmenter`).
+- Herdr 0.9.0 or newer only for the plugin pane; the CLI needs no Herdr.
 - One WebP converter for attached images — `dwebp`, `sips` (macOS), `ffmpeg`,
 ImageMagick or `vips`. /dev/null serves its images as WebP and Node cannot read
 that; without a converter the marker says so and the rest of the pane is
@@ -59,17 +63,39 @@ catches the approval code itself on macOS (`osacompile`) and Linux
 
 ## Install
 
-From GitHub, once this repository is public:
+As a CLI, with a package manager:
 
 ```sh
-herdr plugin install arhen/herdr-devnull-plugin
+npm install -g devnull-tui
+bun add -g devnull-tui
+pnpm add -g devnull-tui
+
+npx devnull-tui --help      # without installing anything
+bunx devnull-tui --help
+```
+
+Without one, no build step:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/arhen/devnull-tui/main/install.sh | sh
+```
+
+The script needs `curl` and Node 20+, puts the files in `~/.local/share/devnull`
+and points `~/.local/bin/devnull` at them (`DEVNULL_HOME`, `DEVNULL_PREFIX` and
+`DEVNULL_REF` override that). Run from a checkout, `sh install.sh` installs that
+checkout instead. To remove it, delete both paths.
+
+As a Herdr plugin:
+
+```sh
+herdr plugin install arhen/devnull-tui
 herdr server reload-config
 ```
 
 From a checkout, while developing:
 
 ```sh
-herdr plugin link ~/Code/personal/herdr-devnull-plugin
+herdr plugin link ~/Code/devnull-tui
 ```
 
 ## Open it
@@ -101,27 +127,10 @@ description = "open the /dev/null feed"
 The pane opens as a split beside the calling pane. Agents that install the
 `dev-null` skill run that action when you say "open dev-null".
 
-## Standalone CLI
+## CLI
 
-The same program runs without Herdr, in any terminal.
-
-Install it with no package manager and no build step:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/arhen/herdr-devnull-plugin/main/install.sh | sh
-```
-
-The script needs `curl` and Node 20+, puts the files in `~/.local/share/devnull`
-and points `~/.local/bin/devnull` at them (`DEVNULL_HOME`, `DEVNULL_PREFIX` and
-`DEVNULL_REF` override that, and `DEVNULL_REPO` covers the repository moving).
-Run from a checkout, `sh install.sh` installs that checkout instead. To remove
-it, delete both paths.
-
-From a checkout, without installing anything:
-
-```sh
-node index.js            # the feed, interactive
-```
+`devnull` is the same program without Herdr, in any terminal. From a checkout,
+`node index.js`.
 
 | Flag | |
 | --- | --- |

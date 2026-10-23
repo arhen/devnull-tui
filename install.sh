@@ -3,12 +3,12 @@
 # checkout, when run from one) goes under ~/.local/share/devnull, and
 # ~/.local/bin/devnull links at it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/arhen/herdr-devnull-plugin/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/arhen/devnull-tui/main/install.sh | sh
 #
 # Override with DEVNULL_HOME, DEVNULL_PREFIX and DEVNULL_REF.
 set -eu
 
-REPO="${DEVNULL_REPO:-arhen/herdr-devnull-plugin}"
+REPO="${DEVNULL_REPO:-arhen/devnull-tui}"
 REF="${DEVNULL_REF:-main}"
 INSTALL_DIR="${DEVNULL_HOME:-$HOME/.local/share/devnull}"
 BIN_DIR="${DEVNULL_PREFIX:-$HOME/.local}/bin"

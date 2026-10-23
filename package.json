@@ -1,12 +1,41 @@
 {
-  "name": "herdr-plugin-devnull",
+  "name": "devnull-tui",
   "version": "0.1.0",
-  "private": true,
+  "description": "Unofficial terminal UI for /dev/null (dev-null.sh), the developers' commit social network",
   "type": "module",
-  "description": "The /dev/null commit log as a timeline, in a Herdr pane or a plain terminal",
+  "bin": {
+    "devnull": "index.js"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "run.sh",
+    "open.sh",
+    "find-node.sh",
+    "install.sh",
+    "herdr-plugin.toml"
+  ],
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arhen/devnull-tui.git"
+  },
+  "homepage": "https://github.com/arhen/devnull-tui",
+  "bugs": {
+    "url": "https://github.com/arhen/devnull-tui/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "devnull",
+    "dev-null",
+    "tui",
+    "terminal",
+    "social",
+    "herdr",
+    "herdr-plugin"
+  ],
   "scripts": {
     "start": "node index.js",
     "once": "node index.js --once",

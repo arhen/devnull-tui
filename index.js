@@ -43,7 +43,7 @@ Keys
 
 Environment
   NO_COLOR                no colour, avatars or images
-  HERDR_PLUGIN_STATE_DIR  cache directory (default ~/.cache/herdr-devnull)
+  HERDR_PLUGIN_STATE_DIR  cache directory (default ~/.cache/devnull-tui)
 
 Outside a terminal it prints once, so \`devnull | less\` works. In a Herdr
 pane the same program is the devnull.feed plugin.
