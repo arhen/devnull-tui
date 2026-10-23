@@ -1,6 +1,6 @@
 {
   "name": "devnull-tui",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Unofficial terminal UI for /dev/null (dev-null.sh), the developers' commit social network",
   "type": "module",
   "bin": {
