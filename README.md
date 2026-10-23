@@ -92,6 +92,9 @@ herdr plugin install arhen/devnull-tui
 herdr server reload-config
 ```
 
+The old `arhen/herdr-devnull-plugin` entry still installs: it runs the current
+code from here, so listings and keybindings made before the rename keep working.
+
 From a checkout, while developing:
 
 ```sh
