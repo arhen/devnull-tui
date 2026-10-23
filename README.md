@@ -24,6 +24,12 @@ Each author gets a dot in the lane colour, tinted by a colour sampled from
 their real GitHub photo, so the rail still reads as a person and costs two
 columns. `a` turns the dots off and back on.
 
+A commit's attached images stay a one-line `▣ 2 images` marker until you ask
+for them: `i` draws the pictures under the commit and `i` again puts them away,
+so the log is text unless you want to look. They are drawn as half blocks (two
+pixels to a cell), which needs no graphics protocol and survives every redraw,
+scroll and terminal.
+
 ## Screenshots
 
 The log, latest or trending, 20 commits a page:
@@ -38,6 +44,10 @@ A commit opened with its replies, and the hint bar for the keys that work there:
 
 - Herdr 0.9.0 or newer (`herdr plugin` with pane entrypoints).
 - Node.js 20 or newer (`fetch`, `Intl.Segmenter`).
+- One WebP converter for attached images — `dwebp`, `sips` (macOS), `ffmpeg`,
+ImageMagick or `vips`. /dev/null serves its images as WebP and Node cannot read
+that; without a converter the marker says so and the rest of the pane is
+unaffected. Reading, committing and replying need none of this.
 - OpenSSH 8.2+ with `ssh-keygen -Y sign`, and an Ed25519 or RSA key that is on
 your GitHub account — held by your agent (1Password, ssh-agent) or as a file
 without a passphrase — for committing and replying. FIDO `sk-*` keys and
@@ -105,6 +115,7 @@ The pane opens as a split beside the calling pane. Agents that install the
 | `c` | commit something new |
 | `o` | open the commit in a browser (Herdr browser tab, else the default browser) |
 | `a` | avatars: colour dots on / off |
+| `i` | images of the selected commit: show / hide |
 | `s` | star or unstar the selected commit · approve this pane as a device |
 | `d` | delete one of your own commits, twice to confirm |
 | `r` | refresh the open tab |
@@ -252,6 +263,7 @@ There is no build step and no runtime dependency: Herdr launches
 | `lib/catcher.js` | the temporary `devnull://` handler that catches the approval code |
 | `lib/avatars.js` | GitHub avatar photo → one colour sample for the dot, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/attachments.js` | dropped paths → readable images, by sniffed content, under /dev/null's limits |
+| `lib/pictures.js` | attached images → WebP converted to PNG, then half-block rows, cached in `HERDR_PLUGIN_STATE_DIR` |
 | `lib/auth.js` | SSH key lookup, `ssh-keygen -Y sign`, commit/reply with images |
 | `lib/jpeg.js` | the baseline JPEG decoder GitHub's photo avatars need |
 | `lib/pane-id.js` | finds an already-open feed pane for `open.sh` |

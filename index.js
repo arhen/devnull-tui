@@ -62,6 +62,8 @@ const state = {
   help: false,
   loading: true,
   avatarMode: /** @type {"circle"|"none"} */ "circle",
+  // Pictures stay hidden until asked for, one commit at a time.
+  revealed: /** @type {Set<string>} */ (new Set()),
   me: null,
   fetchedAt: 0,
   now: Date.now(),
@@ -1231,6 +1233,13 @@ function onKey(key, text) {
       flash(`avatars: ${state.avatarMode === "circle" ? "colour dots" : "off"}`);
       painted = [];
       break;
+    case "i": {
+      const commit = selectedSubject();
+      if (!commit) break;
+      if (state.revealed.has(commit.id)) state.revealed.delete(commit.id);
+      else state.revealed.add(commit.id);
+      break;
+    }
     case "?":
       state.help = !state.help;
       break;
